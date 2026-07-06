@@ -1,0 +1,173 @@
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  addDoc, 
+  deleteDoc, 
+  getDocs, 
+  query, 
+  where,
+  orderBy,
+  limit,
+  updateDoc,
+  serverTimestamp,
+  arrayUnion
+} from 'firebase/firestore';
+import { db } from '../firebaseConfig';
+
+export const chatService = {
+  // Atomic chat room creation with sorted participant ids and merge: true
+  initiateChatRoom: async (currentUser, targetUser) => {
+    const uid1 = currentUser.uid;
+    const uid2 = targetUser.uid || targetUser.id;
+    if (!uid1 || !uid2) throw new Error('Missing user UIDs');
+
+    const chatId = uid1 > uid2 ? `${uid1}_${uid2}` : `${uid2}_${uid1}`;
+    const chatRoomRef = doc(db, 'chats', chatId);
+    const chatSnap = await getDoc(chatRoomRef);
+
+    if (!chatSnap.exists()) {
+      await setDoc(chatRoomRef, {
+        chatId: chatId,
+        type: 'direct',
+        participants: [uid1, uid2],
+        participantData: [
+          { 
+            uid: uid1, 
+            displayName: currentUser.displayName || 'User', 
+            photoURL: currentUser.photoURL || null 
+          },
+          { 
+            uid: uid2, 
+            displayName: targetUser.displayName || targetUser.name || 'User', 
+            photoURL: targetUser.photoURL || targetUser.customAvatarUrl || null 
+          }
+        ],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        lastMessage: null,
+        lastMessageTime: null
+      }, { merge: true });
+    }
+
+    return {
+      chatId,
+      recipient: targetUser,
+      participants: [uid1, uid2]
+    };
+  },
+
+  // Leave Group
+  leaveGroup: async (chatId, userId) => {
+    const chatRef = doc(db, 'chats', chatId);
+    const chatSnap = await getDoc(chatRef);
+    if (!chatSnap.exists()) return;
+
+    const data = chatSnap.data();
+    const updatedParticipants = (data.participants || []).filter(p => p !== userId);
+
+    if (updatedParticipants.length === 0) {
+      await deleteDoc(chatRef);
+    } else {
+      await updateDoc(chatRef, {
+        participants: updatedParticipants,
+        updatedAt: serverTimestamp()
+      });
+    }
+  },
+
+  // Delete Group Globally (Creator Only)
+  deleteGroupGlobally: async (chatId) => {
+    const chatRef = doc(db, 'chats', chatId);
+    return deleteDoc(chatRef);
+  },
+
+  // Delete Chat History (Clear direct chat subcollection messages)
+  clearChatHistory: async (chatId) => {
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const qSnapshot = await getDocs(messagesRef);
+    const deletePromises = [];
+    qSnapshot.forEach((docSnap) => {
+      deletePromises.push(deleteDoc(doc(db, 'chats', chatId, 'messages', docSnap.id)));
+    });
+    await Promise.all(deletePromises);
+
+    // Update parent document
+    await updateDoc(doc(db, 'chats', chatId), {
+      lastMessage: null,
+      lastMessageTime: null,
+      updatedAt: serverTimestamp()
+    });
+  },
+
+  // Send message
+  sendMessage: async (chatId, senderId, text, mediaUrl = null, replyTo = null) => {
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const msgData = {
+      senderId,
+      text,
+      mediaUrl,
+      timestamp: serverTimestamp(),
+      createdAt: new Date().toISOString()
+    };
+    if (replyTo) {
+      msgData.replyTo = replyTo;
+    }
+
+    const docRef = await addDoc(messagesRef, msgData);
+
+    // Update last message in parent chat room
+    await updateDoc(doc(db, 'chats', chatId), {
+      lastMessage: text || (mediaUrl ? '📁 Attachment' : ''),
+      lastMessageTime: new Date().toISOString(),
+      updatedAt: serverTimestamp()
+    });
+
+    return docRef.id;
+  },
+
+  // Edit message text
+  editMessage: async (chatId, messageId, newText) => {
+    const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+    await updateDoc(msgRef, {
+      text: newText,
+      isEdited: true,
+      editedAt: serverTimestamp()
+    });
+  },
+
+  // Delete message for me only
+  deleteMessageForMe: async (chatId, messageId, userId) => {
+    const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+    await updateDoc(msgRef, {
+      deletedFor: arrayUnion(userId)
+    });
+  },
+
+  // Delete individual message (Instagram-Style WIPE)
+  deleteMessage: async (chatId, messageId) => {
+    const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
+    await deleteDoc(msgRef);
+
+    // Rollback lastMessage if deleted message was the latest
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const q = query(messagesRef, orderBy('timestamp', 'desc'), limit(1));
+    const snapshot = await getDocs(q);
+
+    let newLastMessage = null;
+    let newLastMessageTime = null;
+
+    if (!snapshot.empty) {
+      const msgData = snapshot.docs[0].data();
+      newLastMessage = msgData.text || (msgData.mediaUrl ? '📁 Attachment' : '');
+      newLastMessageTime = msgData.createdAt || null;
+    }
+
+    await updateDoc(doc(db, 'chats', chatId), {
+      lastMessage: newLastMessage,
+      lastMessageTime: newLastMessageTime,
+      updatedAt: serverTimestamp()
+    });
+  }
+};
