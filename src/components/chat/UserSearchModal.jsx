@@ -117,7 +117,14 @@ export default function UserSearchModal({ isOpen, onClose }) {
                 >
                   <img src={avatarSrc} alt={u.displayName} className="w-10 h-10 rounded-full object-cover" />
                   <div className="flex-grow min-w-0">
-                    <h4 className="text-white text-sm font-bold truncate">{u.displayName || 'User'}</h4>
+                    <h4 className="text-white text-sm font-bold truncate flex items-center gap-1.5">
+                      {u.displayName || 'User'}
+                      {u.username && (
+                        <span className="text-[10px] text-emerald-400 font-bold bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800">
+                          {u.username}
+                        </span>
+                      )}
+                    </h4>
                     <p className="text-slate-300 text-xs truncate font-medium">{u.email}</p>
                   </div>
                   <span className="text-emerald-400 text-sm font-bold">Chat</span>

@@ -75,13 +75,23 @@ export function useCallManager(currentUser) {
 
     const uniqueRoomName = `vpaas-magic-cookie-c21a564e57a14e4db0d9c7bed344172e/qwik_group_room_${Date.now()}_${currentUser.uid}`;
 
+    const isGroup = activeChat.type === 'group' || activeChat.isGroup || Boolean(activeChat.displayName || activeChat.name);
+    const callTitle = isGroup 
+      ? (activeChat.displayName || activeChat.name || 'Group Call')
+      : (activeChat.recipient?.displayName || 'Personal Call');
+    const callAvatar = isGroup
+      ? (activeChat.avatar || '')
+      : (activeChat.recipient?.photoURL || '');
+
     try {
       const docRef = await addDoc(collection(db, 'calls'), {
         hostId: currentUser.uid,
         hostName: currentUser.displayName || 'Host User',
         hostAvatar: currentUser.photoURL || '',
-        chatName: activeChat.displayName || activeChat.name || 'Group Call', // Handles group name resolution
-        participants: allParticipants, // Broad list: Array of UIDs for bulk group ringing
+        chatName: callTitle,
+        recipientAvatar: callAvatar,
+        isGroup: isGroup,
+        participants: allParticipants,
         roomName: uniqueRoomName,
         type: callType,
         status: 'ringing', // Triggers everyone's listener globally
@@ -91,7 +101,7 @@ export function useCallManager(currentUser) {
       });
       return docRef;
     } catch (err) {
-      console.error("Failed to trigger group call:", err);
+      console.error("Failed to trigger call:", err);
       throw err;
     }
   };
@@ -102,7 +112,8 @@ export function useCallManager(currentUser) {
       const callRef = doc(db, 'calls', callId);
       await updateDoc(callRef, {
         connectedUsers: arrayUnion(currentUser.uid),
-        status: 'connected' // update status to active/connected
+        status: 'connected', // update status to active/connected
+        updatedAt: serverTimestamp()
       });
     } catch (err) {
       console.error("Failed to accept call:", err);
@@ -111,10 +122,14 @@ export function useCallManager(currentUser) {
 
   // 4. Decline/Reject Call
   const declineCall = async (callId) => {
+    if (!callId) return;
     try {
       const callRef = doc(db, 'calls', callId);
       await updateDoc(callRef, {
-        rejectedUsers: arrayUnion(currentUser.uid)
+        status: 'declined',
+        endedBy: currentUser?.uid || '',
+        rejectedUsers: arrayUnion(currentUser?.uid || ''),
+        updatedAt: serverTimestamp()
       });
       setIncomingCall(null);
     } catch (err) {
@@ -124,10 +139,13 @@ export function useCallManager(currentUser) {
 
   // 5. End Call (for everyone or just leave)
   const endCall = async (callId) => {
+    if (!callId) return;
     try {
       const callRef = doc(db, 'calls', callId);
       await updateDoc(callRef, {
-        status: 'ended'
+        status: 'ended',
+        endedBy: currentUser?.uid || '',
+        updatedAt: serverTimestamp()
       });
       setActiveCall(null);
     } catch (err) {

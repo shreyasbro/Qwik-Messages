@@ -10,11 +10,14 @@ import { safeString } from '../../utils/safeRender';
 import MessageBubble from './MessageBubble';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { auth } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
+import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, arrayUnion, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
 
 export default function ChatWindow() {
-  const { activeChat, messages, setActiveChat } = useChat();
+  const { activeChat, setActiveChat } = useChat();
   const { currentUser } = useAuth();
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [inputText, setInputText] = useState('');
   const [showInfoPanel, setShowInfoPanel] = useState(false);
   const { initiateCall } = useCall();
@@ -24,6 +27,44 @@ export default function ChatWindow() {
   const [selectedMessageIds, setSelectedMessageIds] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesEndRef = useRef(null);
+
+  // 1. CHRONOLOGICAL FETCHING PIPELINE
+  useEffect(() => {
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId) {
+      setMessages([]);
+      return;
+    }
+
+    // 1. CRITICAL: Instantly clear old room's messages from UI on room switch!
+    setMessages([]);
+    setLoading(true);
+
+    const messagesRef = collection(db, 'chats', roomId, 'messages');
+    // 2. Strictly sort from oldest (top) to newest (bottom)
+    const q = query(messagesRef, orderBy('createdAt', 'asc'));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const fetched = snapshot.docs.map((docSnap) => {
+        const data = docSnap.data({ serverTimestamps: 'estimate' });
+        return {
+          id: docSnap.id,
+          ...data,
+          timestampMillis: data.createdAt?.toMillis?.() || data.createdAt || Date.now()
+        };
+      });
+
+      // Double-shield: Enforce strict ascending numeric order
+      fetched.sort((a, b) => a.timestampMillis - b.timestampMillis);
+      setMessages(fetched);
+      setLoading(false);
+    }, (err) => {
+      console.error("🚨 Firestore Stream Error:", err);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [activeChat?.id]);
 
   const { recipient } = useRecipient(activeChat?.participants, currentUser?.uid);
   const recipientName = recipient?.displayName || activeChat?.recipient?.displayName || 'User';
@@ -37,54 +78,77 @@ export default function ChatWindow() {
   const canDeleteForEveryone = selectedObjs.length > 0 && selectedObjs.every(msg => msg.senderId === currentUser?.uid);
 
   const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!inputText.trim()) return;
+    if (e) e.preventDefault();
+    const trimmedText = inputText.trim();
+    if (!trimmedText) return;
 
-    // 1. Robust Sender ID Resolution (Props fallback to direct Firebase Auth)
-    const senderId = currentUser?.uid || auth.currentUser?.uid;
+    // 1. Resolve Sender strictly
+    const senderId = currentUser?.uid || auth?.currentUser?.uid;
     if (!senderId) {
-      alert("🚨 Authentication error: You appear to be logged out. Please refresh or re-login.");
+      alert("🚨 Error: You are not authenticated. Please log in again.");
       return;
     }
 
-    // 2. Robust Chat ID Resolution (Check all possible key names)
+    // 2. Resolve Chat Room ID strictly with fallback generation
     let targetChatId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
-
-    // 3. Deterministic Fallback: If room ID is missing but we have participants, generate it atomically
+    
     if (!targetChatId && activeChat?.participants && Array.isArray(activeChat.participants)) {
-      const targetUserId = activeChat.participants.find(id => id !== senderId);
-      if (targetUserId) {
-        targetChatId = senderId > targetUserId ? `${senderId}_${targetUserId}` : `${targetUserId}_${senderId}`;
+      const partnerId = activeChat.participants.find(id => id !== senderId);
+      if (partnerId) {
+        targetChatId = senderId > partnerId ? `${senderId}_${partnerId}` : `${partnerId}_${senderId}`;
       }
     }
 
     if (!targetChatId) {
-      console.error("🚨 Fatal Send Error: Could not resolve Chat ID from object:", activeChat);
-      alert("Failed to send: Could not identify the active chat room. Please re-select the contact from the sidebar.");
+      console.error("🚨 Fatal Send Trap: Missing Room ID for chat object:", activeChat);
+      alert("Could not identify this chat room. Please click the contact in the sidebar again.");
       return;
     }
 
-    const messageText = inputText.trim();
+    console.log(`🚀 Attempting to send message to room: [${targetChatId}] as sender: [${senderId}]`);
     setInputText(''); // Optimistic UI clear
 
     try {
       if (editingMessage) {
-        await chatService.editMessage(String(targetChatId), String(editingMessage.id), messageText);
+        await chatService.editMessage(String(targetChatId), String(editingMessage.id), trimmedText);
         setEditingMessage(null);
       } else {
-        const replyPayload = replyingTo ? {
-          id: String(replyingTo.id),
-          text: String(replyingTo.text || ''),
-          senderName: String(replyingTo.senderId === senderId ? 'Me' : (recipientName || 'User'))
-        } : null;
-        
-        await chatService.sendMessage(String(targetChatId), String(senderId), messageText, null, replyPayload);
+        // 3. Atomic Subcollection Write
+        const messagesRef = collection(db, 'chats', targetChatId, 'messages');
+        const msgPayload = {
+          text: trimmedText,
+          senderId: senderId,
+          createdAt: serverTimestamp(),
+          timestamp: serverTimestamp(),
+          deletedFor: [],
+          isEdited: false
+        };
+        if (replyingTo) {
+          msgPayload.replyTo = {
+            id: String(replyingTo.id),
+            text: String(replyingTo.text || ''),
+            senderName: String(replyingTo.senderId === senderId ? 'Me' : (recipientName || 'User'))
+          };
+        }
+        await addDoc(messagesRef, msgPayload);
+
+        // 4. Atomic Parent Room Update (Using setDoc merge to prevent 'No document to update' errors)
+        const roomRef = doc(db, 'chats', targetChatId);
+        await setDoc(roomRef, {
+          id: targetChatId,
+          lastMessage: trimmedText,
+          updatedAt: serverTimestamp(),
+          participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
+        }, { merge: true });
+
         setReplyingTo(null);
       }
-    } catch (error) {
-      console.error("🚨 Firestore Send Failure:", error);
-      alert(`Message failed to send: ${error.message || "Network error"}`);
-      setInputText(messageText); // Restore text on failure
+
+      console.log("✅ Message successfully written to Firestore!");
+    } catch (err) {
+      console.error("🚨 Firebase Write Error:", err);
+      alert(`Failed to send message: ${err.message}`);
+      setInputText(trimmedText); // Restore input text on failure
     }
   };
 
@@ -103,24 +167,50 @@ export default function ChatWindow() {
   };
 
   const handleDeleteForMe = async (messageId) => {
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId) return;
     try {
-      const currentChatId = String(activeChat?.chatId || activeChat?.id || '');
       const currentUserId = String(currentUser?.uid || '');
-      await chatService.deleteMessageForMe(currentChatId, String(messageId), currentUserId);
+      const msgRef = doc(db, 'chats', roomId, 'messages', messageId);
+      await setDoc(msgRef, {
+        deletedFor: arrayUnion(currentUserId)
+      }, { merge: true });
     } catch (err) {
       console.error("Delete for me failed:", err);
-      alert(`Failed to delete message: ${err.message || "Network Error"}`);
+      alert(`Failed to delete message: ${err.message}`);
     }
   };
 
   const handleDeleteForEveryone = async (messageId) => {
     if (!window.confirm("Wipe this message from everyone's screens?")) return;
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId) return;
     try {
-      const currentChatId = String(activeChat?.chatId || activeChat?.id || '');
-      await chatService.deleteMessage(currentChatId, String(messageId));
+      const msgRef = doc(db, 'chats', roomId, 'messages', messageId);
+      await deleteDoc(msgRef);
+
+      // Rollback lastMessage if deleted message was the latest
+      const messagesRef = collection(db, 'chats', roomId, 'messages');
+      const q = query(messagesRef, orderBy('createdAt', 'desc'), limit(1));
+      const snapshot = await getDocs(q);
+
+      let newLastMessage = null;
+      let newLastMessageTime = null;
+
+      if (!snapshot.empty) {
+        const msgData = snapshot.docs[0].data();
+        newLastMessage = msgData.text || (msgData.mediaUrl ? '📁 Attachment' : '');
+        newLastMessageTime = msgData.createdAt || null;
+      }
+
+      await setDoc(doc(db, 'chats', roomId), {
+        lastMessage: newLastMessage,
+        lastMessageTime: newLastMessageTime,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
     } catch (err) {
       console.error("Delete for everyone failed:", err);
-      alert(`Failed to delete message for everyone: ${err.message || "Network Error"}`);
+      alert(`Failed to delete message for everyone: ${err.message}`);
     }
   };
 
@@ -138,39 +228,48 @@ export default function ChatWindow() {
   };
 
   const handleBulkDeleteForMe = async () => {
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId || !selectedMessageIds.length) return;
     try {
-      const currentChatId = String(activeChat?.chatId || activeChat?.id || '');
       const currentUserId = String(currentUser?.uid || '');
-      await Promise.all(selectedMessageIds.map(id => 
-        chatService.deleteMessageForMe(currentChatId, String(id), currentUserId)
-      ));
+      await Promise.all(selectedMessageIds.map(msgId => {
+        const msgRef = doc(db, 'chats', roomId, 'messages', msgId);
+        return setDoc(msgRef, {
+          deletedFor: arrayUnion(currentUserId)
+        }, { merge: true });
+      }));
       setIsSelectMode(false);
       setSelectedMessageIds([]);
     } catch (err) {
       console.error("Bulk delete for me failed:", err);
-      alert(`Failed to bulk delete messages: ${err.message || "Network Error"}`);
+      alert(`Failed to bulk delete messages: ${err.message}`);
     }
   };
 
   const handleBulkDeleteForEveryone = async () => {
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId || !selectedMessageIds.length) return;
     if (!window.confirm(`Wipe ${selectedMessageIds.length} messages for everyone?`)) return;
+
     try {
-      const currentChatId = String(activeChat?.chatId || activeChat?.id || '');
-      await Promise.all(selectedMessageIds.map(id => 
-        chatService.deleteMessage(currentChatId, String(id))
-      ));
-      setIsSelectMode(false);
+      await Promise.all(
+        selectedMessageIds.map((msgId) => {
+          const msgRef = doc(db, 'chats', roomId, 'messages', msgId);
+          return deleteDoc(msgRef);
+        })
+      );
       setSelectedMessageIds([]);
+      setIsSelectMode(false);
     } catch (err) {
-      console.error("Bulk delete for everyone failed:", err);
-      alert(`Failed to bulk delete messages for everyone: ${err.message || "Network Error"}`);
+      console.error("🚨 Bulk Delete Error:", err);
+      alert(`Delete failed: ${err.message}`);
     }
   };
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, activeChat?.id]);
 
   // Turn off select mode when switching chats
   useEffect(() => {
@@ -301,9 +400,13 @@ export default function ChatWindow() {
         </AnimatePresence>
 
         {/* Message Bubble Logs List */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 relative bg-slate-950/40">
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 relative bg-slate-950/40 flex flex-col">
           <AnimatePresence initial={false}>
-            {safeMessages.length === 0 ? (
+            {loading ? (
+              <div className="text-center py-20">
+                <p className="text-xs text-slate-400 font-semibold animate-pulse">Loading secure conversation...</p>
+              </div>
+            ) : safeMessages.length === 0 ? (
               <div className="text-center py-20">
                 <p className="text-sm text-slate-300 font-medium">Say hi to your new friend! 👋</p>
               </div>

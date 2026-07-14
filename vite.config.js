@@ -8,4 +8,13 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    pool: 'vmThreads',
+    vmThreads: {
+      singleThread: true,
+    },
+  },
 })

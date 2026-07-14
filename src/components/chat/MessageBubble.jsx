@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { safeString } from '../../utils/safeRender';
 import { motion, AnimatePresence } from 'framer-motion';
+import { auth } from '../../firebaseConfig';
 
 export default function MessageBubble({ 
   message, 
@@ -17,7 +18,9 @@ export default function MessageBubble({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
-  const isOwn = message.senderId === currentUser?.uid;
+  
+  const currentUid = currentUser?.uid || auth?.currentUser?.uid;
+  const isOwn = Boolean(currentUid && message?.senderId === currentUid);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -45,7 +48,7 @@ export default function MessageBubble({
       exit={{ opacity: 0, scale: 0.8 }} 
       transition={{ duration: 0.2, ease: "easeOut" }}
       onClick={handleBubbleClick}
-      className={`flex items-center gap-2 mb-3 relative w-full ${isOwn ? 'flex-row-reverse justify-start' : 'flex-row justify-start'} ${isSelectMode ? 'cursor-pointer select-none' : ''}`}
+      className={`flex items-center gap-2 mb-3 relative w-full ${isOwn ? 'justify-end' : 'justify-start'} ${isSelectMode ? 'cursor-pointer select-none' : ''}`}
     >
       {/* Checkbox Indicator for Select Mode */}
       <AnimatePresence>
@@ -71,8 +74,8 @@ export default function MessageBubble({
       {/* Message Bubble Container */}
       <div className={`relative max-w-[70%] rounded-2xl px-4 py-2.5 text-sm ${
         isOwn 
-          ? 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 border border-emerald-500/30 text-white rounded-tr-none' 
-          : 'bg-slate-900 border border-slate-800 text-white rounded-tl-none'
+          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-tr-none' 
+          : 'bg-[#1E293B] text-slate-100 border border-slate-700/60 rounded-tl-none'
       }`}>
         
         {/* Quoted Reply Banner */}

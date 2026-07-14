@@ -6,6 +6,7 @@ import { authService } from '../../services/authService';
 import { useRecipient } from '../../hooks/useRecipient';
 import { safeString } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
+import ProfileEditorModal from '../profile/ProfileEditorModal';
 
 function ChatListItem({ chat, currentUser, activeChat, setActiveChat }) {
   const { recipient } = useRecipient(chat.participants, currentUser?.uid);
@@ -64,6 +65,7 @@ export default function ChatSidebar() {
   const { chats, activeChat, setActiveChat, chatsLoading } = useChat();
   const { currentUser, userProfile } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [showProfileModal, setShowProfileModal] = useState(false);
 
   // Clean Deduplication Logic for 1-on-1 Chats in Sidebar
   const deduplicatedChats = useMemo(() => {
@@ -112,7 +114,9 @@ export default function ChatSidebar() {
           <img 
             src={userService.resolveAvatar(userProfile || currentUser)} 
             alt="My profile" 
-            className="w-10 h-10 rounded-full border border-slate-800 object-cover" 
+            className="w-10 h-10 rounded-full border border-slate-800 object-cover cursor-pointer hover:border-emerald-400 transition-colors" 
+            onClick={() => setShowProfileModal(true)}
+            title="Edit profile"
           />
           <div className="min-w-0">
             <h3 className="text-sm font-black text-white truncate">
@@ -172,6 +176,14 @@ export default function ChatSidebar() {
 
       {/* Start Chat Modal */}
       <UserSearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+
+      {/* Profile Editor Modal */}
+      <ProfileEditorModal 
+        isOpen={showProfileModal} 
+        onClose={() => setShowProfileModal(false)} 
+        currentUser={currentUser}
+        userProfile={userProfile}
+      />
 
     </div>
   );

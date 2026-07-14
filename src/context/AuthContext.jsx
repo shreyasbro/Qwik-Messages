@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db } from '../firebaseConfig';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { generateDefaultUsername, isUsernameAvailable } from '../utils/usernameUtils';
 
 const AuthContext = createContext();
 
@@ -27,9 +28,30 @@ export function AuthProvider({ children }) {
     if (!currentUser?.uid) return;
 
     const userDocRef = doc(db, 'users', currentUser.uid);
-    const unsubscribeProfile = onSnapshot(userDocRef, (snap) => {
+    const unsubscribeProfile = onSnapshot(userDocRef, async (snap) => {
       if (snap.exists()) {
-        setUserProfile(snap.data());
+        const data = snap.data();
+        setUserProfile(data);
+        
+        // Auto-migrate if user doesn't have a username
+        if (!data.username) {
+          try {
+            let candidate = generateDefaultUsername(data.displayName || currentUser.displayName || 'user', data.email || currentUser.email || '');
+            let isAvailable = await isUsernameAvailable(candidate, currentUser.uid);
+            
+            let attempts = 0;
+            while (!isAvailable && attempts < 10) {
+              candidate = generateDefaultUsername(data.displayName || currentUser.displayName || 'user', data.email || currentUser.email || '');
+              isAvailable = await isUsernameAvailable(candidate, currentUser.uid);
+              attempts++;
+            }
+
+            await setDoc(userDocRef, { username: candidate }, { merge: true });
+            console.log(`✅ Automatically migrated user to username: ${candidate}`);
+          } catch (err) {
+            console.error("🚨 Username migration failure:", err);
+          }
+        }
       }
       setLoading(false);
     }, (error) => {

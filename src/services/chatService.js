@@ -10,7 +10,6 @@ import {
   where,
   orderBy,
   limit,
-  updateDoc,
   serverTimestamp,
   arrayUnion
 } from 'firebase/firestore';
@@ -70,10 +69,10 @@ export const chatService = {
     if (updatedParticipants.length === 0) {
       await deleteDoc(chatRef);
     } else {
-      await updateDoc(chatRef, {
+      await setDoc(chatRef, {
         participants: updatedParticipants,
         updatedAt: serverTimestamp()
-      });
+      }, { merge: true });
     }
   },
 
@@ -94,11 +93,11 @@ export const chatService = {
     await Promise.all(deletePromises);
 
     // Update parent document
-    await updateDoc(doc(db, 'chats', chatId), {
+    await setDoc(doc(db, 'chats', chatId), {
       lastMessage: null,
       lastMessageTime: null,
       updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
   },
 
   // Send message
@@ -118,11 +117,11 @@ export const chatService = {
     const docRef = await addDoc(messagesRef, msgData);
 
     // Update last message in parent chat room
-    await updateDoc(doc(db, 'chats', chatId), {
+    await setDoc(doc(db, 'chats', chatId), {
       lastMessage: text || (mediaUrl ? '📁 Attachment' : ''),
       lastMessageTime: new Date().toISOString(),
       updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
 
     return docRef.id;
   },
@@ -130,19 +129,19 @@ export const chatService = {
   // Edit message text
   editMessage: async (chatId, messageId, newText) => {
     const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
-    await updateDoc(msgRef, {
+    await setDoc(msgRef, {
       text: newText,
       isEdited: true,
       editedAt: serverTimestamp()
-    });
+    }, { merge: true });
   },
 
   // Delete message for me only
   deleteMessageForMe: async (chatId, messageId, userId) => {
     const msgRef = doc(db, 'chats', chatId, 'messages', messageId);
-    await updateDoc(msgRef, {
+    await setDoc(msgRef, {
       deletedFor: arrayUnion(userId)
-    });
+    }, { merge: true });
   },
 
   // Delete individual message (Instagram-Style WIPE)
@@ -164,10 +163,10 @@ export const chatService = {
       newLastMessageTime = msgData.createdAt || null;
     }
 
-    await updateDoc(doc(db, 'chats', chatId), {
+    await setDoc(doc(db, 'chats', chatId), {
       lastMessage: newLastMessage,
       lastMessageTime: newLastMessageTime,
       updatedAt: serverTimestamp()
-    });
+    }, { merge: true });
   }
 };
