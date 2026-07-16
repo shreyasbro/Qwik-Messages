@@ -411,22 +411,59 @@ export default function ChatWindow() {
                 <p className="text-sm text-slate-300 font-medium">Say hi to your new friend! 👋</p>
               </div>
             ) : (
-              safeMessages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  currentUser={currentUser}
-                  onReply={handleStartReply}
-                  onEdit={handleStartEdit}
-                  onDeleteForMe={handleDeleteForMe}
-                  onDeleteForEveryone={handleDeleteForEveryone}
-                  formatTimeSafe={formatTimeSafe}
-                  isSelectMode={isSelectMode}
-                  isSelected={selectedMessageIds.includes(m.id)}
-                  onSelectToggle={handleSelectToggle}
-                  onStartSelectMode={handleStartSelectMode}
-                />
-              ))
+              (() => {
+                const getWhatsAppDateLabel = (timestampMillis) => {
+                  const validMillis = timestampMillis || Date.now();
+                  const msgDate = new Date(validMillis);
+                  const today = new Date();
+                  const yesterday = new Date(today);
+                  yesterday.setDate(yesterday.getDate() - 1);
+
+                  if (msgDate.toDateString() === today.toDateString()) {
+                    return 'Today';
+                  }
+                  if (msgDate.toDateString() === yesterday.toDateString()) {
+                    return 'Yesterday';
+                  }
+                  
+                  return msgDate.toLocaleDateString('en-GB', { 
+                    day: 'numeric', 
+                    month: 'long', 
+                    year: 'numeric' 
+                  });
+                };
+
+                return safeMessages.map((m, index) => {
+                  const currentLabel = getWhatsAppDateLabel(m.timestampMillis);
+                  const prevLabel = index > 0 ? getWhatsAppDateLabel(safeMessages[index - 1].timestampMillis) : null;
+                  const showDateHeader = currentLabel !== prevLabel;
+
+                  return (
+                    <React.Fragment key={m.id || m.timestampMillis || index}>
+                      {showDateHeader && (
+                        <div className="flex justify-center my-3 select-none animate-fade-in z-10">
+                          <span className="bg-[#1e293b]/95 text-slate-200 text-[11px] font-bold px-4 py-1 rounded-full border border-slate-700/80 shadow-md tracking-wider uppercase">
+                            {currentLabel}
+                          </span>
+                        </div>
+                      )}
+                      <MessageBubble
+                        message={m}
+                        currentUser={currentUser}
+                        onReply={handleStartReply}
+                        onEdit={handleStartEdit}
+                        onDeleteForMe={handleDeleteForMe}
+                        onDeleteForEveryone={handleDeleteForEveryone}
+                        formatTimeSafe={formatTimeSafe}
+                        isSelectMode={isSelectMode}
+                        isSelected={selectedMessageIds.includes(m.id)}
+                        onSelectToggle={handleSelectToggle}
+                        onStartSelectMode={handleStartSelectMode}
+                      />
+                    </React.Fragment>
+                  );
+                });
+              })()
             )}
           </AnimatePresence>
           <div ref={messagesEndRef} />
