@@ -21,6 +21,7 @@ export default function MessageBubble({
   
   const currentUid = currentUser?.uid || auth?.currentUser?.uid;
   const isOwn = Boolean(currentUid && message?.senderId === currentUid);
+  const isMe = isOwn; // Enforce early scope declaration to prevent TDZ ReferenceError
 
   // Close dropdown on outside click
   useEffect(() => {
