@@ -1,14 +1,40 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ChatProvider } from './context/ChatContext';
 import { CallProvider } from './context/CallContext';
 import LoginScreen from './components/auth/LoginScreen';
 import MainLayout from './components/layout/MainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
+import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
+import { auth } from './firebaseConfig';
 
 function AppContent() {
   const { currentUser } = useAuth();
   const [hasAcceptedRebuild, setHasAcceptedRebuild] = React.useState(false);
+
+  // Magic Link Verification Handler on mount
+  useEffect(() => {
+    if (isSignInWithEmailLink(auth, window.location.href)) {
+      let email = window.localStorage.getItem('emailForSignIn');
+      
+      if (!email) {
+        email = window.prompt('Please confirm your email address to complete sign-in:');
+      }
+
+      if (email) {
+        signInWithEmailLink(auth, email, window.location.href)
+          .then((result) => {
+            console.log('🎉 Successfully signed in with Magic Link!', result.user);
+            window.localStorage.removeItem('emailForSignIn');
+            window.history.replaceState({}, document.title, window.location.pathname);
+          })
+          .catch((err) => {
+            console.error('🚨 Magic Link Verification Failed:', err);
+            alert('This sign-in link has expired or is invalid. Please request a new one.');
+          });
+      }
+    }
+  }, []);
 
   if (!currentUser) {
     return <LoginScreen />;

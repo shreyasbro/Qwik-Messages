@@ -11,7 +11,8 @@ import {
   orderBy,
   limit,
   serverTimestamp,
-  arrayUnion
+  arrayUnion,
+  writeBatch
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
@@ -82,22 +83,31 @@ export const chatService = {
     return deleteDoc(chatRef);
   },
 
-  // Delete Chat History (Clear direct chat subcollection messages)
-  clearChatHistory: async (chatId) => {
+  // Delete Chat History (Clear direct chat subcollection messages - Soft delete for me)
+  clearChatHistory: async (chatId, userId) => {
+    if (!userId || !chatId) return;
     const messagesRef = collection(db, 'chats', chatId, 'messages');
     const qSnapshot = await getDocs(messagesRef);
-    const deletePromises = [];
-    qSnapshot.forEach((docSnap) => {
-      deletePromises.push(deleteDoc(doc(db, 'chats', chatId, 'messages', docSnap.id)));
-    });
-    await Promise.all(deletePromises);
 
-    // Update parent document
-    await setDoc(doc(db, 'chats', chatId), {
-      lastMessage: null,
-      lastMessageTime: null,
-      updatedAt: serverTimestamp()
-    }, { merge: true });
+    // Use Firestore WriteBatch for high-performance atomic updates
+    const batch = writeBatch(db);
+    let count = 0;
+
+    qSnapshot.forEach((documentSnap) => {
+      const msgData = documentSnap.data();
+      if (!msgData.deletedFor?.includes(userId)) {
+        const msgDocRef = doc(db, 'chats', chatId, 'messages', documentSnap.id);
+        batch.update(msgDocRef, {
+          deletedFor: arrayUnion(userId)
+        });
+        count++;
+      }
+    });
+
+    if (count > 0) {
+      await batch.commit();
+      console.log(`✅ Successfully cleared ${count} messages for user:`, userId);
+    }
   },
 
   // Send message

@@ -10,7 +10,7 @@ export default function DangerZone({ isGroup = false, creatorId = null }) {
   const handleClearHistory = async () => {
     if (!window.confirm("Wipe all message logs? This cannot be undone.")) return;
     try {
-      await chatService.clearChatHistory(activeChat.chatId);
+      await chatService.clearChatHistory(activeChat.chatId, currentUser.uid);
     } catch (e) {
       console.error("Clear logs failed:", e);
     }

@@ -53,7 +53,7 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat }) {
             </span>
           )}
         </div>
-        <p className="text-xs text-slate-300 truncate font-medium">
+        <p className="text-xs text-slate-300 truncate max-w-[180px] font-medium">
           {safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
         </p>
       </div>
@@ -109,22 +109,35 @@ export default function ChatSidebar() {
     <div className="w-full md:w-[350px] lg:w-[400px] h-full flex flex-col bg-[#0B111E] border-r border-slate-900 select-none flex-shrink-0">
       
       {/* Top Header Profile Rail */}
-      <div className="p-4 flex items-center justify-between border-b border-slate-900">
-        <div className="flex items-center gap-3">
-          <img 
-            src={userService.resolveAvatar(userProfile || currentUser)} 
-            alt="My profile" 
-            className="w-10 h-10 rounded-full border border-slate-800 object-cover cursor-pointer hover:border-emerald-400 transition-colors" 
-            onClick={() => setShowProfileModal(true)}
-            title="Edit profile"
-          />
-          <div className="min-w-0">
-            <h3 className="text-sm font-black text-white truncate">
-              {userProfile?.displayName || currentUser?.displayName || 'My Profile'}
-            </h3>
-            <p className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider">Online</p>
-          </div>
-        </div>
+      <div className="p-4 flex items-center justify-between border-b border-slate-900 bg-slate-900/40 select-none w-full box-border">
+        {(() => {
+          const userDisplayName = userProfile?.displayName || currentUser?.displayName || currentUser?.email || 'Logged In User';
+          const userAvatarUrl = userService.resolveAvatar({
+            ...(userProfile || {}),
+            displayName: userDisplayName,
+            photoURL: currentUser?.photoURL || userProfile?.avatarUrl
+          });
+
+          return (
+            <div className="flex items-center gap-3 cursor-pointer overflow-hidden group" onClick={() => setShowProfileModal(true)}>
+              {/* Dynamic Bordered Avatar Frame */}
+              <div className="relative w-10 h-10 rounded-full overflow-hidden border border-teal-500/40 bg-slate-800 flex items-center justify-center shrink-0">
+                <img src={userAvatarUrl} alt="User Account" className="w-full h-full object-cover" />
+              </div>
+
+              {/* Account Identity Node */}
+              <div className="flex flex-col min-w-0 overflow-hidden">
+                {/* Dynamic Name or Email String */}
+                <h4 className="text-sm font-bold text-slate-200 tracking-wide truncate max-w-[150px] md:max-w-[170px] group-hover:text-teal-400 transition-colors duration-150">
+                  {userDisplayName}
+                </h4>
+                <p className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider mt-0.5">
+                  {userProfile?.status || 'ONLINE'}
+                </p>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">

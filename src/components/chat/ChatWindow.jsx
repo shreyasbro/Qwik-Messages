@@ -118,6 +118,8 @@ export default function ChatWindow() {
         const msgPayload = {
           text: trimmedText,
           senderId: senderId,
+          senderName: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User',
+          photoURL: currentUser?.photoURL || null,
           createdAt: serverTimestamp(),
           timestamp: serverTimestamp(),
           deletedFor: [],
