@@ -14,6 +14,7 @@ export default function LoginScreen() {
   const [isForgotOpen, setIsForgotOpen] = useState(false);
   const [isMagicLinkMode, setIsMagicLinkMode] = useState(false);
   const [magicLinkSent, setMagicLinkSent] = useState(false);
+  const [isInfoOpen, setIsInfoOpen] = useState(true);
 
   const handleSendMagicLink = async (e) => {
     e.preventDefault();
@@ -76,15 +77,139 @@ export default function LoginScreen() {
   };
 
   return (
-    <div className="w-full min-h-screen bg-[#030712] relative font-sans overflow-hidden select-none box-border">
-      
-      {/* Dynamic Blurred Background Ambient Liquid Orbs */}
-      <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-teal-500/10 rounded-full filter blur-[100px] pointer-events-none animate-pulse duration-[6000ms] opacity-80" />
-      <div className="absolute bottom-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full filter blur-[120px] pointer-events-none animate-pulse duration-[8000ms]" />
-      <div className="absolute bottom-1/4 left-0 w-64 h-64 bg-slate-800/10 rounded-full filter blur-[100px] pointer-events-none opacity-40" />
+    <div className="min-h-screen w-full bg-[#030712] flex flex-col md:flex-row font-sans overflow-hidden select-none box-border relative">
 
-      {/* Centering layout content wrap */}
-      <div className="flex items-center justify-center min-h-screen w-full relative z-10 box-border p-4">
+      {/* 🚀 LEFT SIDE: SLEEK COLLAPSIBLE INFO PANEL (Fixed 360px Width) */}
+      {isInfoOpen && (
+        <div className="hidden md:flex w-[360px] shrink-0 bg-slate-950/60 border-r border-slate-800/80 backdrop-blur-3xl p-8 flex-col h-screen overflow-y-auto custom-scrollbar relative z-20 transition-all duration-300 shadow-2xl">
+          
+          {/* Top Bar with Brand Header and Close Button */}
+          <div className="flex items-start justify-between mb-8 pb-4 border-b border-slate-800/60">
+            <div>
+              <h1 className="text-xl font-black text-white tracking-tighter uppercase">QWIK MESSAGES</h1>
+              <div className="h-0.5 w-8 bg-teal-500 mt-1 rounded-full"></div>
+            </div>
+            
+            {/* CLOSE BUTTON ('✕') - Collapses Panel */}
+            <button 
+              type="button" 
+              onClick={() => setIsInfoOpen(false)}
+              title="Close Feature Panel"
+              className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition-colors text-sm cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* SCROLLABLE FEATURES LIST */}
+          <div className="space-y-6 pb-8 flex-1">
+            
+            {/* Feature 1: Magic Link */}
+            <div className="group">
+              <h3 className="text-teal-400 font-bold text-sm mb-1 flex items-center gap-2">
+                <span>✨</span> Magic Link Access
+              </h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Say goodbye to forgotten passwords. Receive a secure, one-time encrypted link to sign in instantly without typing credentials.
+              </p>
+            </div>
+
+            {/* Feature 2: Password Security */}
+            <div>
+              <h3 className="text-teal-400 font-bold text-sm mb-1 flex items-center gap-2">
+                <span>🔐</span> Secure Password Login
+              </h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Traditional authentication hardened with enterprise-grade encryption and industry-leading security protocols.
+              </p>
+            </div>
+
+            {/* Feature 3: Google Integration */}
+            <div>
+              <h3 className="text-teal-400 font-bold text-sm mb-1 flex items-center gap-2">
+                <span>G</span> Google One-Tap
+              </h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Frictionless onboarding with Google OAuth. Sync your profile photo, display name, and identity in a single click.
+              </p>
+            </div>
+
+            {/* Feature 4: Forgot Password Recovery */}
+            <div>
+              <h3 className="text-teal-400 font-bold text-sm mb-1 flex items-center gap-2">
+                <span>🔄</span> Forgot Password
+              </h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Lost access? Our automated recovery system lets you reset credentials securely in under 30 seconds via verified email dispatch.
+              </p>
+            </div>
+
+            {/* Feature 5: Rapid Registration */}
+            <div>
+              <h3 className="text-teal-400 font-bold text-sm mb-1 flex items-center gap-2">
+                <span>🚀</span> Instant Registration
+              </h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                New to Qwik Messages? Sign up today and experience lightning-fast real-time messaging with a zero-latency global backend.
+              </p>
+            </div>
+
+          </div>
+
+          {/* Panel Footer */}
+          <div className="pt-4 border-t border-slate-800/60 mt-auto">
+            <p className="text-[9px] text-slate-500 uppercase tracking-widest font-bold">
+              © 2026 QWIK MESSAGES OFFICIAL
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 💡 FLOATING REOPEN TRIGGER WITH "INFO" BADGE & CURVED DOTTED ARROW CALLOUT */}
+      {!isInfoOpen && (
+        <div className="hidden md:flex fixed top-6 left-6 z-30 flex-col items-start animate-fade-in select-none">
+          
+          {/* 1. Reopen Action Button - Locked to "Info" */}
+          <button 
+            type="button"
+            onClick={() => setIsInfoOpen(true)}
+            title="Show Info Panel"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/95 border border-slate-700/80 backdrop-blur-2xl text-teal-400 hover:text-white text-xs font-bold uppercase tracking-wider shadow-2xl hover:border-teal-500 transition-all cursor-pointer z-10"
+          >
+            <span className="text-sm">💡</span>
+            <span>Info</span>
+          </button>
+
+          {/* 2. Precision Callout Block: Custom Bezier Arc + "Click to know" Text */}
+          <div className="flex items-center gap-2 mt-1 ml-4 pointer-events-none">
+            
+            {/* Dynamic Bezier Curved Dotted Arrow pointing cleanly up-left towards the Info button */}
+            <svg 
+              className="w-8 h-8 text-teal-400 stroke-current fill-none overflow-visible -translate-y-1" 
+              viewBox="0 0 24 24" 
+              strokeWidth="2" 
+              strokeDasharray="3 3"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 18 C 14 18, 8 16, 6 6" />
+              <polyline strokeLinecap="round" strokeLinejoin="round" points="2 10 6 6 10 8" />
+            </svg>
+
+            {/* Sleek Onboarding Tooltip Label */}
+            <span className="text-[11px] font-medium tracking-wide text-slate-300 bg-slate-950/95 px-3 py-1.5 rounded-lg border border-slate-800/90 backdrop-blur-md shadow-xl whitespace-nowrap">
+              Click to know
+            </span>
+          </div>
+
+        </div>
+      )}
+
+      {/* 🎯 RIGHT SIDE: THE LOGIN CANVAS (Automatically expands and centers!) */}
+      <div className="flex-1 flex items-center justify-center p-4 relative overflow-y-auto transition-all duration-300 w-full min-h-screen">
+        {/* Dynamic Blurred Background Ambient Liquid Orbs */}
+        <div className="absolute top-1/4 left-1/4 w-72 h-72 bg-teal-500/10 rounded-full filter blur-[100px] pointer-events-none animate-pulse duration-[6000ms] opacity-80" />
+        <div className="absolute bottom-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full filter blur-[120px] pointer-events-none animate-pulse duration-[8000ms]" />
+        <div className="absolute bottom-1/4 left-0 w-64 h-64 bg-slate-800/10 rounded-full filter blur-[100px] pointer-events-none opacity-40" />
+
         {/* MAIN CARD CONTAINER: Deep Liquid Glassmorphism */}
         <div className="w-full max-w-[440px] h-auto bg-[#0b111e]/60 backdrop-blur-2xl border border-slate-800/80 rounded-3xl p-6 md:p-8 shadow-2xl shadow-black/40 relative z-10 box-border flex flex-col items-center animate-scale-in my-auto">
           
@@ -94,7 +219,7 @@ export default function LoginScreen() {
               QWIK MESSAGES
             </h2>
             <p className="text-[10px] font-bold text-teal-400 uppercase tracking-widest mt-1">
-              Next-Gen Enterprise Chat V3.0
+              Next-Gen Enterprise Chat
             </p>
           </div>
 

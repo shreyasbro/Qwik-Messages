@@ -11,6 +11,16 @@ import { auth } from './firebaseConfig';
 function AppContent() {
   const { currentUser } = useAuth();
   const [hasAcceptedRebuild, setHasAcceptedRebuild] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const supportEmail = "qwik.messages.official@gmail.com";
+
+  const handleEmailClick = (e) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(supportEmail);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 3000);
+    }
+  };
 
   // Magic Link Verification Handler on mount
   useEffect(() => {
@@ -52,13 +62,40 @@ function AppContent() {
           </div>
 
           <h2 className="text-2xl font-black text-white tracking-tight mb-3">WEBSITE UNDER CONSTRUCTION</h2>
-          <p className="text-sm text-slate-300 leading-relaxed mb-8">
+          <p className="text-sm text-slate-300 leading-relaxed mb-2">
             This website is currently rebuilding and undergoing some upgrades. Thank you for your patience!
           </p>
 
+          {/* ✅ SMART ENTERPRISE FEEDBACK BLOCK: Handles PC Clipboard Copy + Mobile Mailto */}
+          <div className="mt-3 text-center px-2 w-full select-none">
+            <p className="text-[11px] text-slate-400 leading-normal">
+              If you have any problems or want to give feedback, email us at:
+            </p>
+            
+            <div className="flex flex-col items-center justify-center mt-1">
+              <a 
+                href={`mailto:${supportEmail}?subject=Qwik%20Messages%20-%20Support/Feedback`}
+                onClick={handleEmailClick}
+                title="Click to copy email & open mail client"
+                className="inline-block text-[11px] md:text-xs font-bold text-teal-400 hover:text-teal-300 underline underline-offset-4 whitespace-nowrap tracking-wide transition-colors duration-150 cursor-pointer pointer-events-auto"
+              >
+                {supportEmail}
+              </a>
+
+              {/* Dynamic PC Fallback Visual Toast */}
+              <div className="h-4 mt-1 flex items-center justify-center">
+                {copied && (
+                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full animate-fade-in-up tracking-wider shadow-sm">
+                    ✅ Copied to clipboard!
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
           <button
             onClick={() => setHasAcceptedRebuild(true)}
-            className="w-full py-4 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-sm uppercase rounded-xl transition-all shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/20 active:scale-[0.98] cursor-pointer"
+            className="w-full mt-5 py-4 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 text-slate-950 font-black text-sm uppercase rounded-xl transition-all shadow-lg shadow-emerald-500/10 hover:shadow-emerald-500/20 active:scale-[0.98] cursor-pointer"
           >
             Ok, Let's Chat!
           </button>
