@@ -317,22 +317,38 @@ export default function ChatWindow() {
       <div className="flex-1 h-full flex flex-col min-w-0 relative">
         
         {/* Chat Window Header */}
-        <div className="p-4 flex items-center justify-between border-b border-slate-900 bg-[#0B111E] z-10">
-          <div className="flex items-center gap-3 min-w-0">
+        {/* Chat Window Custom Header */}
+        <div className="p-4 flex items-center justify-between border-b border-slate-900 bg-[#0B111E] z-10 select-none">
+          
+          {/* CLICKABLE RECIPIENT PROFILE TRIGGER */}
+          <div 
+            onClick={() => setShowInfoPanel(true)}
+            className="flex items-center gap-3 cursor-pointer group p-1.5 rounded-xl hover:bg-slate-800/40 transition-all select-none min-w-0"
+            title="Click to view user info"
+          >
             <button 
-              onClick={() => setActiveChat(null)}
+              onClick={(e) => { e.stopPropagation(); setActiveChat(null); }}
               className="md:hidden text-slate-300 hover:text-white mr-1 text-lg font-bold"
             >
               ←
             </button>
-            <img 
-              src={avatarSrc} 
-              alt={safeString(recipientName)} 
-              className="w-10 h-10 rounded-full object-cover border border-slate-800" 
-            />
+            
+            <div className="relative">
+              <img 
+                src={avatarSrc} 
+                alt={safeString(recipientName)} 
+                className="w-10 h-10 rounded-full object-cover border border-slate-800 group-hover:border-teal-500 transition-colors" 
+              />
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 border-2 border-slate-900 rounded-full"></span>
+            </div>
+
             <div className="min-w-0">
-              <h3 className="text-sm font-black text-white truncate">{safeString(recipientName, 'Chat Member')}</h3>
-              <p className="text-[10px] text-slate-300 font-medium truncate">Direct Secure Connection</p>
+              <h3 className="text-sm font-black text-white group-hover:text-teal-400 transition-colors truncate">
+                {safeString(recipientName, 'Chat Member')}
+              </h3>
+              <p className="text-[10px] text-slate-300 font-medium truncate">
+                Direct Secure Connection
+              </p>
             </div>
           </div>
 
@@ -342,12 +358,6 @@ export default function ChatWindow() {
               className="px-3.5 py-1.5 text-xs font-black uppercase tracking-wider text-slate-950 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 rounded-lg transition-colors cursor-pointer"
             >
               📞 Call
-            </button>
-            <button
-              onClick={() => setShowInfoPanel(!showInfoPanel)}
-              className="px-3 py-1.5 text-xs font-black uppercase tracking-wider text-slate-300 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg transition-colors cursor-pointer"
-            >
-              {showInfoPanel ? 'Hide Details' : 'View Info'}
             </button>
           </div>
         </div>
@@ -543,7 +553,23 @@ export default function ChatWindow() {
 
       {/* Right Drawer Info Panel */}
       {showInfoPanel && (
-        <div className="w-[300px] border-l border-slate-900 bg-[#0B111E] h-full flex flex-col p-6 overflow-y-auto custom-scrollbar flex-shrink-0 animate-fade-in z-10">
+        <div className="w-[300px] border-l border-slate-900 bg-[#0B111E] h-full flex flex-col p-6 overflow-y-auto custom-scrollbar flex-shrink-0 animate-fade-in z-10 select-none">
+          
+          {/* Drawer Header with Close Button */}
+          <div className="flex items-center justify-between pb-4 border-b border-slate-900 mb-6">
+            <h2 className="text-xs font-black uppercase tracking-wider text-slate-300">User Info</h2>
+            
+            {/* '✕' CLOSE BUTTON */}
+            <button 
+              type="button"
+              onClick={() => setShowInfoPanel(false)}
+              title="Close Info"
+              className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition-colors text-sm cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
           <div className="text-center mb-6 border-b border-slate-900 pb-6">
             <img src={avatarSrc} alt={safeString(recipientName)} className="w-20 h-20 rounded-full mx-auto object-cover border-2 border-emerald-500/20 shadow-lg mb-3" />
             <h4 className="text-white font-black text-lg">{safeString(recipientName, 'Chat Member')}</h4>
