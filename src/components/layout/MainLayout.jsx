@@ -4,10 +4,14 @@ import ChatWindow from '../chat/ChatWindow';
 import { useCall } from '../../context/CallContext';
 import { useAuth } from '../../context/AuthContext';
 import JitsiCallWindow from '../calling/JitsiCallWindow';
+import { usePresence } from '../../hooks/usePresence';
 
 export default function MainLayout() {
   const { incomingCall, activeCall, acceptCall, declineCall, endCall } = useCall();
   const { currentUser } = useAuth();
+
+  // Initialize socket-based real-time presence system
+  usePresence(currentUser);
 
   return (
     <div className="w-screen h-[100dvh] flex bg-slate-950 overflow-hidden relative">
