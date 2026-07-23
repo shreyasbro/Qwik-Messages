@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import io from "socket.io-client";
+import { io } from "socket.io-client";
 
 // Initialize socket connection
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:5000";

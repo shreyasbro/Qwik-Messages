@@ -8,6 +8,13 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  optimizeDeps: {
+    include: ['socket.io-client'], // ⚡ CRITICAL: Forces Vite to bundle socket.io-client cleanly
+  },
+  server: {
+    port: 5173,
+    host: true,
+  },
   test: {
     globals: true,
     environment: 'jsdom',

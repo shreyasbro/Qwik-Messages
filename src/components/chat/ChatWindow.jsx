@@ -354,7 +354,7 @@ export default function ChatWindow() {
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => initiateCall(activeChat, 'video')}
+              onClick={() => alert("📞 Voice & Video calling feature is coming soon in the next update!")}
               className="px-3.5 py-1.5 text-xs font-black uppercase tracking-wider text-slate-950 bg-gradient-to-r from-emerald-400 via-teal-400 to-cyan-400 hover:from-emerald-300 hover:to-cyan-300 rounded-lg transition-colors cursor-pointer"
             >
               📞 Call

@@ -157,10 +157,17 @@ export default function LoginScreen() {
 
           </div>
 
-          {/* Panel Footer */}
-          <div className="pt-4 border-t border-slate-800/60 mt-auto">
-            <p className="text-[9px] text-slate-500 uppercase tracking-widest font-bold">
+          {/* SIDEBAR FOOTER: COPYRIGHT & CREATOR ATTRIBUTION */}
+          <div className="mt-auto pt-6 border-t border-slate-800/80 text-left space-y-1.5 select-none">
+            {/* Copyright Line */}
+            <p className="text-[11px] font-bold tracking-widest text-slate-500 uppercase">
               © 2026 QWIK MESSAGES OFFICIAL
+            </p>
+
+            {/* Creator Credit Line with Indian Flag */}
+            <p className="text-xs font-semibold text-slate-400 flex items-center gap-1.5 hover:text-teal-400 transition-colors group cursor-default">
+              <span>Made by <span className="text-white font-bold group-hover:text-teal-300 transition-colors">Shreyas</span> in</span>
+              <span className="text-sm shadow-sm inline-block transform group-hover:scale-110 transition-transform" title="India">🇮🇳</span>
             </p>
           </div>
         </div>

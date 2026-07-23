@@ -61,12 +61,83 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat }) {
   );
 }
 
+function ContactSelectorItem({ chat, currentUser, activeSpecificModal, specificContacts, setSpecificContacts }) {
+  const { recipient } = useRecipient(chat.participants, currentUser?.uid);
+  const friendId = recipient?.uid || recipient?.id || chat.chatId;
+  const friendName = recipient?.displayName || 'Loading...';
+  const avatarSrc = recipient?.photoURL || userService.resolveAvatar({ displayName: friendName });
+  const isSelected = specificContacts[activeSpecificModal]?.includes(friendId);
+  const statusDisplay = recipient?.status || (recipient?.isOnline ? "🟢 Online" : "⚪ Offline") || "Direct Secure Connection";
+
+  return (
+    <div 
+      onClick={() => {
+        setSpecificContacts((prev) => {
+          const currentList = prev[activeSpecificModal] || [];
+          const updated = isSelected 
+            ? currentList.filter(id => id !== friendId)
+            : [...currentList, friendId];
+          return { ...prev, [activeSpecificModal]: updated };
+        });
+      }}
+      className={`flex items-center justify-between p-2.5 rounded-xl border cursor-pointer transition-all ${
+        isSelected ? "bg-teal-500/10 border-teal-500/50" : "bg-slate-950/40 border-slate-800/60 hover:border-slate-700"
+      }`}
+    >
+      <div className="flex items-center gap-2.5 overflow-hidden">
+        <img src={avatarSrc} alt={friendName} className="w-8 h-8 rounded-full border border-slate-700 object-cover shrink-0" />
+        <div className="truncate text-left">
+          <p className="text-xs font-bold text-white truncate">{friendName}</p>
+          <p className="text-[10px] text-slate-400 truncate max-w-[180px]">{statusDisplay}</p>
+        </div>
+      </div>
+      
+      {/* Checkbox Indicator */}
+      <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all shrink-0 ${
+        isSelected ? "bg-teal-500 border-teal-400 text-slate-950 font-black text-xs" : "border-slate-600 bg-slate-900"
+      }`}>
+        {isSelected && "✓"}
+      </div>
+    </div>
+  );
+}
+
 export default function ChatSidebar() {
   const { chats, activeChat, setActiveChat, chatsLoading } = useChat();
   const { currentUser, userProfile } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsView, setSettingsView] = useState("main"); // 'main' | 'privacy'
+  const [privacySettings, setPrivacySettings] = useState({
+    lastSeen: "everyone",     // 'everyone' | 'contacts' | 'nobody' | 'specific'
+    profilePhoto: "contacts", // 'everyone' | 'contacts' | 'nobody' | 'specific'
+    readReceipts: "everyone", // 'everyone' | 'contacts' | 'nobody' | 'specific'
+  });
 
+  // Store selected specific user IDs for each setting
+  const [specificContacts, setSpecificContacts] = useState({
+    lastSeen: [],
+    profilePhoto: [],
+    readReceipts: [],
+  });
+
+  // State to control which setting is currently open in the Contact Selector Modal
+  const [activeSpecificModal, setActiveSpecificModal] = useState(null); // 'lastSeen' | 'profilePhoto' | 'readReceipts' | null
+
+  const handlePrivacyChange = (key, value) => {
+    setPrivacySettings((prev) => ({ ...prev, [key]: value }));
+    console.log(`🔒 Updated ${key} to:`, value);
+    if (value === "specific") {
+      setActiveSpecificModal(key);
+    }
+  };
+
+  const handleCloseSettings = () => {
+    setIsSettingsOpen(false);
+    setSettingsView("main");
+  };
+ 
   // Clean Deduplication Logic for 1-on-1 Chats in Sidebar
   const deduplicatedChats = useMemo(() => {
     if (!Array.isArray(chats)) return [];
@@ -106,7 +177,7 @@ export default function ChatSidebar() {
   };
 
   return (
-    <div className="w-full md:w-[350px] lg:w-[400px] h-full flex flex-col bg-[#0B111E] border-r border-slate-900 select-none flex-shrink-0">
+    <div className="w-full md:w-[350px] lg:w-[400px] h-full flex flex-col bg-[#0B111E] border-r border-slate-900 select-none flex-shrink-0 relative">
       
       {/* Top Header Profile Rail */}
       <div className="p-4 flex items-center justify-between border-b border-slate-900 bg-slate-900/40 select-none w-full box-border">
@@ -141,6 +212,19 @@ export default function ChatSidebar() {
 
         {/* Action Controls */}
         <div className="flex items-center gap-2">
+          {/* ⚙️ SETTINGS BUTTON */}
+          <button
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+            title="App Settings"
+            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-450 hover:text-teal-400 transition-all cursor-pointer shadow-sm"
+          >
+            <svg className="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+
           {/* New Chat Button */}
           <button
             onClick={() => setIsSearchOpen(true)}
@@ -197,6 +281,230 @@ export default function ChatSidebar() {
         currentUser={currentUser}
         userProfile={userProfile}
       />
+
+      {/* ⚙️ WHATSAPP-STYLE SETTINGS DRAWER (Slides in from left) */}
+      {isSettingsOpen && (
+        <div className="fixed inset-y-0 left-0 z-50 w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 backdrop-blur-3xl flex flex-col shadow-2xl animate-fade-in select-none animate-slide-in">
+          
+          {/* Header */}
+          <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/40">
+            <div className="flex items-center gap-2.5">
+              <span className="text-teal-400 text-lg">⚙️</span>
+              <h2 className="text-base font-black uppercase tracking-wider text-white">Settings</h2>
+            </div>
+            <button 
+              type="button"
+              onClick={handleCloseSettings}
+              className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition-colors text-sm cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* CONDITIONAL RENDERING BASED ON ACTIVE VIEW */}
+          {settingsView === "main" ? (
+            /* Settings List (WhatsApp Style Menu) */
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 text-left">
+              
+              {/* 1. Privacy Settings */}
+              <div 
+                onClick={() => setSettingsView("privacy")}
+                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-teal-500/50 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">🔒</span>
+                    <div>
+                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Privacy Settings</p>
+                      <p className="text-[11px] text-slate-400">Read receipts, Last seen, Profile photo</p>
+                    </div>
+                  </div>
+                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                </div>
+              </div>
+
+              {/* 2. Change Email Feature */}
+              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">📧</span>
+                    <div>
+                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Change Email Address</p>
+                      <p className="text-[11px] text-slate-400">Update primary security credentials</p>
+                    </div>
+                  </div>
+                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                </div>
+              </div>
+
+              {/* 3. Link Second Account */}
+              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">👥</span>
+                    <div>
+                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Add or Link Account</p>
+                      <p className="text-[11px] text-slate-400">Switch between multi-user profiles</p>
+                    </div>
+                  </div>
+                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                </div>
+              </div>
+
+              {/* 4. About App & Creator */}
+              <div className="mt-6 p-4 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950 border border-slate-800 space-y-2 text-center">
+                <h3 className="text-xs font-black uppercase tracking-widest text-teal-400">Qwik Messages Enterprise</h3>
+                <p className="text-[11px] text-slate-400 font-medium">Version 3.0.0</p>
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-center gap-1.5 text-xs text-slate-300 font-semibold">
+                  <span>Architected by <span className="text-white font-bold">Shreyas Thakur</span></span>
+                  <span className="text-sm" title="India">🇮🇳</span>
+                </div>
+              </div>
+
+            </div>
+          ) : (
+            /* --- PRIVACY SETTINGS SUB-MENU --- */
+            <div className="flex-1 overflow-y-auto p-4 space-y-5 text-left animate-fade-in">
+              
+              {/* Sub-Menu Header with Back Button */}
+              <button 
+                type="button"
+                onClick={() => setSettingsView("main")}
+                className="flex items-center gap-2 text-xs font-bold text-teal-400 hover:text-white transition-colors cursor-pointer mb-2"
+              >
+                <span>← Back to Settings</span>
+              </button>
+
+              {/* 1. LAST SEEN CONTROL */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <span>🕒</span> Who can see my Last Seen
+                </h3>
+                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
+                  {[
+                    { label: "Everyone", value: "everyone" },
+                    { label: "Contacts Only", value: "contacts" },
+                    { label: "Nobody", value: "nobody" },
+                    { label: "Specific Person...", value: "specific" },
+                  ].map((opt) => (
+                    <label 
+                      key={opt.value} 
+                      onClick={() => handlePrivacyChange("lastSeen", opt.value)}
+                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
+                    >
+                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.lastSeen === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
+                        {privacySettings.lastSeen === opt.value && <span className="text-[10px] font-bold">✓</span>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 2. PROFILE PHOTO CONTROL */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <span>🖼️</span> Who can see my Profile Photo
+                </h3>
+                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
+                  {[
+                    { label: "Everyone", value: "everyone" },
+                    { label: "Contacts Only", value: "contacts" },
+                    { label: "Nobody", value: "nobody" },
+                    { label: "Specific Person...", value: "specific" },
+                  ].map((opt) => (
+                    <label 
+                      key={opt.value} 
+                      onClick={() => handlePrivacyChange("profilePhoto", opt.value)}
+                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
+                    >
+                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.profilePhoto === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
+                        {privacySettings.profilePhoto === opt.value && <span className="text-[10px] font-bold">✓</span>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3. READ RECEIPTS CONTROL */}
+              <div className="space-y-2">
+                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <span>✓✓</span> Read Receipts (Blue Ticks)
+                </h3>
+                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
+                  {[
+                    { label: "Everyone", value: "everyone" },
+                    { label: "Contacts Only", value: "contacts" },
+                    { label: "Nobody", value: "nobody" },
+                    { label: "Specific Person...", value: "specific" },
+                  ].map((opt) => (
+                    <label 
+                      key={opt.value} 
+                      onClick={() => handlePrivacyChange("readReceipts", opt.value)}
+                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
+                    >
+                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.readReceipts === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
+                        {privacySettings.readReceipts === opt.value && <span className="text-[10px] font-bold">✓</span>}
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* 👥 SPECIFIC PERSON CONTACT SELECTION MODAL */}
+      {activeSpecificModal && (
+        <div className="fixed inset-0 z-[60] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in select-none">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col max-h-[80vh] overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/50">
+              <div>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Select Contacts</h3>
+                <p className="text-[11px] text-teal-400 font-medium capitalize">For {activeSpecificModal.replace(/([A-Z])/g, ' $1')}</p>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setActiveSpecificModal(null)}
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-800 text-xs cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Friend List with Checkboxes */}
+            <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+              {deduplicatedChats.map((c) => (
+                <ContactSelectorItem
+                  key={c.chatId}
+                  chat={c}
+                  currentUser={currentUser}
+                  activeSpecificModal={activeSpecificModal}
+                  specificContacts={specificContacts}
+                  setSpecificContacts={setSpecificContacts}
+                />
+              ))}
+            </div>
+
+            {/* Modal Footer / Save Button */}
+            <div className="p-3 border-t border-slate-800 bg-slate-950/50">
+              <button
+                type="button"
+                onClick={() => setActiveSpecificModal(null)}
+                className="w-full py-2.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl transition-all shadow-lg cursor-pointer"
+              >
+                Done ({specificContacts[activeSpecificModal]?.length || 0} Selected)
+              </button>
+            </div>          </div>
+        </div>
+      )}
 
     </div>
   );

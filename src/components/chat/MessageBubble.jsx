@@ -240,13 +240,6 @@ export default function MessageBubble({
             )}
         </div>
       </div>
-
-      {/* RIGHT AVATAR NODE (For Outgoing Messages) */}
-      {isMe && (
-        <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 border border-teal-500/40 bg-slate-800 flex items-center justify-center shadow-sm mb-0.5 select-none">
-          <img src={resolvedPhotoUrl} alt="Me" className="w-full h-full object-cover" />
-        </div>
-      )}
     </motion.div>
   );
 }
