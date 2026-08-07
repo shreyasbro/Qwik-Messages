@@ -1,15 +1,18 @@
 import React, { useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { ChatProvider } from './context/ChatContext';
+import { ChatProvider, useChat } from './context/ChatContext';
 import { CallProvider } from './context/CallContext';
 import LoginScreen from './components/auth/LoginScreen';
 import MainLayout from './components/layout/MainLayout';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import { isSignInWithEmailLink, signInWithEmailLink } from 'firebase/auth';
 import { auth } from './firebaseConfig';
+import AccountMergeModal from './components/auth/AccountMergeModal';
+import { useSessionTimeout } from './hooks/useSessionTimeout';
 
 function AppContent() {
   const { currentUser } = useAuth();
+  useSessionTimeout(currentUser);
   const [hasAcceptedRebuild, setHasAcceptedRebuild] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const supportEmail = "qwik.messages.official@gmail.com";
@@ -52,7 +55,7 @@ function AppContent() {
 
   if (!hasAcceptedRebuild) {
     return (
-      <div className="fixed inset-0 z-[1000000] w-screen h-[100dvh] bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-4 select-none animate-fade-in">
+      <div className="fixed inset-0 z-[1000000] w-full h-[100dvh] bg-slate-950/90 backdrop-blur-xl flex items-center justify-center p-4 select-none animate-fade-in">
         <div className="w-full max-w-md bg-[#0B111E] border border-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden flex flex-col items-center text-center animate-scale-up">
           {/* Header Accent */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-48 h-1.5 bg-gradient-to-r from-amber-400 via-orange-400 to-rose-400 blur-sm"></div>
@@ -104,10 +107,52 @@ function AppContent() {
     );
   }
 
+function MainLayoutWrapper() {
+  const { previewImage, setPreviewImage } = useChat();
+  return (
+    <>
+      <MainLayout />
+      <AccountMergeModal />
+      
+      {/* ✅ REFACTOR: WhatsApp/Instagram Style Immersive Media Viewer */}
+      {previewImage && (
+        <div 
+          className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/90 backdrop-blur-lg animate-fade-in cursor-zoom-out"
+          onClick={() => setPreviewImage(null)}
+        >
+          {/* Top Bar with Action Controls */}
+          <div className="absolute top-4 right-4 flex items-center gap-4 z-[10000]">
+            <button 
+              onClick={() => setPreviewImage(null)}
+              className="text-slate-400 hover:text-white bg-slate-900/80 hover:bg-slate-800 p-3 rounded-full transition-all border border-slate-750 shadow-lg cursor-pointer"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path>
+              </svg>
+            </button>
+          </div>
+
+          {/* Immersive Responsive Image Stage */}
+          <div 
+            className="w-full h-full max-w-[95vw] max-h-[90vh] flex items-center justify-center p-4 transition-all duration-300 scale-up-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img 
+              src={previewImage} 
+              alt="Avatar HD Preview" 
+              className="max-w-full max-h-full w-auto h-auto md:max-w-[70vw] md:max-h-[80vh] object-contain rounded-xl shadow-2xl border border-slate-900 select-none pointer-events-auto" 
+            />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
   return (
     <ChatProvider>
       <CallProvider>
-        <MainLayout />
+        <MainLayoutWrapper />
       </CallProvider>
     </ChatProvider>
   );

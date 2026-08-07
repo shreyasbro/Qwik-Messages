@@ -10,6 +10,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
   const [displayName, setDisplayName] = useState(userProfile?.displayName || currentUser?.displayName || '');
   const [username, setUsername] = useState(userProfile?.username || '');
   const [photoURL, setPhotoURL] = useState(userProfile?.photoURL || currentUser?.photoURL || '');
+  const [bio, setBio] = useState(userProfile?.bio || "Hey there! I am using Qwik Messages.");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingImageSrc, setEditingImageSrc] = useState(null);
@@ -25,6 +26,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       setDisplayName(userProfile.displayName || currentUser?.displayName || '');
       setUsername(userProfile.username || '');
       setPhotoURL(userProfile.photoURL || currentUser?.photoURL || '');
+      setBio(userProfile.bio || "Hey there! I am using Qwik Messages.");
     }
   }, [userProfile, currentUser]);
 
@@ -121,12 +123,13 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       // 3. File URL
       let finalPhotoUrl = photoURL;
 
-      // 4. CRITICAL ATOMIC WRITE: Strictly save username to Firestore!
+      // 4. CRITICAL ATOMIC WRITE: Strictly save username and bio to Firestore!
       const userDocRef = doc(db, 'users', currentUser.uid);
       await setDoc(userDocRef, {
         displayName: displayName.trim(),
         username: formattedUsername, // Absolutely enforce this payload!
         photoURL: finalPhotoUrl,
+        bio: bio.trim(),
         updatedAt: serverTimestamp()
       }, { merge: true });
 
@@ -152,23 +155,25 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
   };
 
   return (
-    <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md select-none">
-      <div className="w-full max-w-md bg-slate-950/85 backdrop-blur-2xl border border-slate-800 rounded-3xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
-        {/* Glow Line */}
-        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-400 to-teal-400"></div>
+    <div className="fixed inset-0 z-[99999] flex flex-col h-[100dvh] w-full bg-slate-950 text-white overflow-hidden justify-start select-none">
+      
+      {/* Sleek Top Navigation Header with Back button */}
+      <header className="flex-shrink-0 w-full flex items-center p-4 bg-slate-900 border-b border-slate-800 z-10">
+        <button 
+          type="button"
+          onClick={onClose} 
+          className="mr-4 p-2 rounded-full hover:bg-slate-800 transition-colors focus:outline-none cursor-pointer"
+          aria-label="Go back"
+        >
+          <svg className="w-6 h-6 text-slate-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+        </button>
+        <h1 className="text-xl font-semibold text-slate-100">Edit Profile</h1>
+      </header>
 
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-lg font-black text-white uppercase tracking-wider">
-            Edit Profile
-          </h2>
-          <button 
-            onClick={onClose} 
-            className="text-slate-400 hover:text-white transition-colors p-1"
-          >
-            ✕
-          </button>
-        </div>
-
+      {/* Main Content Area: Flex-1 and scrollable */}
+      <main className="flex-1 w-full overflow-y-auto p-4 md:p-6 custom-scrollbar max-w-lg mx-auto">
         <form onSubmit={handleSubmit} className="space-y-5">
           {/* Avatar Upload Area */}
           <div className="flex flex-col items-center gap-2">
@@ -229,7 +234,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
                 required
               />
               {/* Uniqueness Status Indicators */}
-              <div className="mt-1.5 min-h-[16px] text-[10px] font-bold">
+              <div className="mt-1.5 min-h-[16px] text-[10px] font-bold mb-4">
                 {checkingUsername && <span className="text-slate-400">Verifying registry...</span>}
                 {!checkingUsername && usernameStatus === 'available' && (
                   <span className="text-emerald-400">🟢 Username available</span>
@@ -241,6 +246,26 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
                   <span className="text-amber-400">⚠️ Minimum 3 letters, must start with @</span>
                 )}
               </div>
+            </div>
+
+            {/* BIO / ABOUT ME FIELD */}
+            <div className="space-y-1.5 text-left">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-300">
+                  Bio / About
+                </label>
+                <span className="text-[10px] text-slate-500 font-mono">
+                  {bio.length}/150
+                </span>
+              </div>
+              <textarea
+                rows="3"
+                maxLength={150}
+                value={bio}
+                onChange={(e) => setBio(e.target.value)}
+                placeholder="Write something about yourself..."
+                className="w-full bg-slate-900/60 border border-slate-800 focus:border-emerald-500 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none transition-colors resize-none shadow-inner"
+              />
             </div>
           </div>
 
@@ -262,7 +287,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
             </button>
           </div>
         </form>
-      </div>
+      </main>
       {editingImageSrc && (
         <PhotoEditorModal 
           imageSrc={editingImageSrc} 

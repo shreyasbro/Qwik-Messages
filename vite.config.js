@@ -9,7 +9,7 @@ export default defineConfig({
     tailwindcss(),
   ],
   optimizeDeps: {
-    include: ['socket.io-client'], // ⚡ CRITICAL: Forces Vite to bundle socket.io-client cleanly
+    include: ['axios'], // ⚡ Forces Vite to cache Axios properly on boot
   },
   server: {
     port: 5173,

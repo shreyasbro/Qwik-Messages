@@ -7,12 +7,16 @@ import { useRecipient } from '../../hooks/useRecipient';
 import { safeString } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
 import ProfileEditorModal from '../profile/ProfileEditorModal';
+import SupportFAQ from './SupportFAQ';
 
-function ChatListItem({ chat, currentUser, activeChat, setActiveChat }) {
+function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
   const { recipient } = useRecipient(chat.participants, currentUser?.uid);
   const chatName = recipient?.displayName || 'Loading...';
   const avatarSrc = recipient?.photoURL || userService.resolveAvatar({ displayName: chatName });
   const isActive = activeChat?.chatId === chat.chatId;
+
+  // Real-time typing status tracking state
+  const [isTyping, setIsTyping] = React.useState(false);
 
   const formatTimeSafe = (timestamp) => {
     if (!timestamp) return '';
@@ -37,25 +41,45 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat }) {
           participants: chat.participants
         });
       }}
-      className={`flex items-center gap-3 p-3 rounded-2xl cursor-pointer transition-all duration-150 active:scale-[0.99] border ${
+      className={`flex items-center gap-4 p-3.5 mx-2 mb-1.5 rounded-2xl cursor-pointer transition-all duration-300 ease-in-out border ${
         isActive 
-          ? 'bg-slate-900 border-slate-800 shadow-md shadow-black' 
-          : 'bg-transparent border-transparent hover:bg-slate-900/40 hover:border-slate-900'
+          ? 'bg-slate-800/60 border-slate-700/50 shadow-lg shadow-black/25' 
+          : 'bg-transparent border-transparent hover:bg-slate-800/40 hover:border-slate-700/50'
       }`}
     >
-      <img src={avatarSrc} alt={safeString(chatName)} className="w-11 h-11 rounded-full object-cover border border-white/5 flex-shrink-0" />
-      <div className="flex-grow min-w-0">
-        <div className="flex justify-between items-baseline mb-0.5">
-          <h4 className="text-white text-sm font-bold truncate pr-2">{safeString(chatName)}</h4>
+      <div className="relative shrink-0 select-none">
+        <img 
+          src={avatarSrc} 
+          alt={safeString(chatName)} 
+          title="View profile picture"
+          onClick={(e) => {
+            e.stopPropagation();
+            setPreviewImage(avatarSrc);
+          }}
+          className="w-11 h-11 rounded-2xl object-cover border border-slate-700/60 cursor-pointer hover:brightness-90 transition-all active:scale-95" 
+        />
+        {isTyping ? (
+          <span 
+            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-emerald-500 flex items-center justify-center shadow-[0_0_10px_rgba(16,185,129,0.7)] animate-pulse"
+          />
+        ) : (
+          <span 
+            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-slate-500 scale-90"
+          />
+        )}
+      </div>
+      <div className="flex-grow min-w-0 text-left">
+        <div className="flex justify-between items-center mb-1">
+          <h3 className="text-[13px] font-bold text-slate-200 tracking-wide truncate">{safeString(chatName)}</h3>
           {chat.lastMessageTime && (
-            <span className="text-[10px] text-slate-500 font-bold">
+            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
               {formatTimeSafe(chat.lastMessageTime)}
             </span>
           )}
         </div>
-        <p className="text-xs text-slate-300 truncate max-w-[180px] font-medium">
-          {safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
-        </p>
+        <div className={`text-[11px] truncate max-w-[180px] font-medium ${isTyping ? "text-emerald-400 font-semibold" : "text-slate-400"}`}>
+          {isTyping ? "typing..." : safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
+        </div>
       </div>
     </div>
   );
@@ -103,7 +127,7 @@ function ContactSelectorItem({ chat, currentUser, activeSpecificModal, specificC
 }
 
 export default function ChatSidebar() {
-  const { chats, activeChat, setActiveChat, chatsLoading } = useChat();
+  const { chats, activeChat, setActiveChat, chatsLoading, setPreviewImage } = useChat();
   const { currentUser, userProfile } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -192,18 +216,25 @@ export default function ChatSidebar() {
           return (
             <div className="flex items-center gap-3 cursor-pointer overflow-hidden group" onClick={() => setShowProfileModal(true)}>
               {/* Dynamic Bordered Avatar Frame */}
-              <div className="relative w-10 h-10 rounded-full overflow-hidden border border-teal-500/40 bg-slate-800 flex items-center justify-center shrink-0">
+              <div 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPreviewImage(userAvatarUrl);
+                }}
+                title="View profile picture"
+                className="relative w-10 h-10 rounded-full overflow-hidden border border-teal-500/40 bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer hover:scale-105 transition-transform"
+              >
                 <img src={userAvatarUrl} alt="User Account" className="w-full h-full object-cover" />
               </div>
 
               {/* Account Identity Node */}
-              <div className="flex flex-col min-w-0 overflow-hidden">
+              <div className="flex flex-col min-w-0 overflow-hidden text-left">
                 {/* Dynamic Name or Email String */}
                 <h4 className="text-sm font-bold text-slate-200 tracking-wide truncate max-w-[150px] md:max-w-[170px] group-hover:text-teal-400 transition-colors duration-150">
                   {userDisplayName}
                 </h4>
-                <p className="text-[9px] font-bold text-emerald-400 uppercase tracking-wider mt-0.5">
-                  {userProfile?.status || 'ONLINE'}
+                <p className="text-[10px] text-slate-400 truncate mt-0.5 font-medium tracking-wide">
+                  {currentUser?.email || "Account Secure"}
                 </p>
               </div>
             </div>
@@ -245,7 +276,7 @@ export default function ChatSidebar() {
       </div>
 
       {/* Chat Room Stream List */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1">
         {chatsLoading ? (
           <p className="text-center text-slate-300 text-xs py-8">Updating chats stream...</p>
         ) : deduplicatedChats.length === 0 ? (
@@ -266,6 +297,7 @@ export default function ChatSidebar() {
               currentUser={currentUser}
               activeChat={activeChat}
               setActiveChat={setActiveChat}
+              setPreviewImage={setPreviewImage}
             />
           ))
         )}
@@ -324,7 +356,10 @@ export default function ChatSidebar() {
               </div>
 
               {/* 2. Change Email Feature */}
-              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group">
+              <div 
+                onClick={() => alert("📧 The 'Change Email Address' feature is currently under development and will be available in the next update!")}
+                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group"
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-lg">📧</span>
@@ -338,7 +373,10 @@ export default function ChatSidebar() {
               </div>
 
               {/* 3. Link Second Account */}
-              <div className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group">
+              <div 
+                onClick={() => alert("🔗 The 'Add or Link Account' feature is currently under development and will be available in the next update!")}
+                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group"
+              >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <span className="text-lg">👥</span>
@@ -351,7 +389,24 @@ export default function ChatSidebar() {
                 </div>
               </div>
 
-              {/* 4. About App & Creator */}
+              {/* ⚡ 4. Support & FAQ Accordion Section */}
+              <div 
+                onClick={() => setSettingsView("support")}
+                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-teal-500/50 transition-all cursor-pointer group"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <span className="text-lg">ℹ️</span>
+                    <div>
+                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Support & FAQ</p>
+                      <p className="text-[11px] text-slate-400">Help docs, call guides & support accordion</p>
+                    </div>
+                  </div>
+                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                </div>
+              </div>
+
+              {/* 5. About App & Creator */}
               <div className="mt-6 p-4 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950 border border-slate-800 space-y-2 text-center">
                 <h3 className="text-xs font-black uppercase tracking-widest text-teal-400">Qwik Messages Enterprise</h3>
                 <p className="text-[11px] text-slate-400 font-medium">Version 3.0.0</p>
@@ -361,6 +416,20 @@ export default function ChatSidebar() {
                 </div>
               </div>
 
+            </div>
+          ) : settingsView === "support" ? (
+            /* --- SUPPORT & FAQ ACCORDION SUB-MENU --- */
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-left animate-fade-in">
+              {/* Back button */}
+              <button 
+                type="button"
+                onClick={() => setSettingsView("main")}
+                className="flex items-center gap-2 text-xs font-bold text-teal-400 hover:text-white transition-colors cursor-pointer mb-2"
+              >
+                <span>← Back to Settings</span>
+              </button>
+              
+              <SupportFAQ />
             </div>
           ) : (
             /* --- PRIVACY SETTINGS SUB-MENU --- */

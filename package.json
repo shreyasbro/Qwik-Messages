@@ -5,23 +5,40 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:clean": "vite --force",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "vercel-dev": "vercel dev"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@jitsi/react-sdk": "^1.4.4",
     "@tailwindcss/vite": "^4.3.2",
+    "axios": "^1.19.0",
+    "cloudinary": "^2.10.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "emoji-picker-react": "^4.19.1",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
     "firebase": "^12.15.0",
+    "firebase-admin": "^14.2.0",
     "framer-motion": "^12.42.2",
+    "helmet": "^8.3.0",
     "lucide-react": "^1.23.0",
+    "multer": "^2.2.0",
+    "node-cron": "^4.6.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "socket.io-client": "^4.8.3",
-    "tailwindcss": "^4.3.2"
+    "tailwindcss": "^4.3.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

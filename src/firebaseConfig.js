@@ -6,13 +6,13 @@ import { getStorage } from 'firebase/storage';
 
 // Verified Production Credentials
 const firebaseConfig = {
-  apiKey: "AIzaSyDaCCwgpQksNNgLp3GXJx2ggjUEFpu4YPk",
-  authDomain: "qwik-messages.firebaseapp.com",
-  databaseURL: "https://qwik-messages-default-rtdb.firebaseio.com",
-  projectId: "qwik-messages",
-  storageBucket: "qwik-messages.firebasestorage.app",
-  messagingSenderId: "440183384115",
-  appId: "1:440183384115:web:e5c6a70463365642be9b46"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Prevent duplicate initialization during Vite Hot Module Replacement (HMR)

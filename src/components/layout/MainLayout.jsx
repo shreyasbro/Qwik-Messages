@@ -3,24 +3,27 @@ import ChatSidebar from '../chat/ChatSidebar';
 import ChatWindow from '../chat/ChatWindow';
 import { useCall } from '../../context/CallContext';
 import { useAuth } from '../../context/AuthContext';
+import { useChat } from '../../context/ChatContext';
 import JitsiCallWindow from '../calling/JitsiCallWindow';
-import { usePresence } from '../../hooks/usePresence';
 
 export default function MainLayout() {
   const { incomingCall, activeCall, acceptCall, declineCall, endCall } = useCall();
   const { currentUser } = useAuth();
 
-  // Initialize socket-based real-time presence system
-  usePresence(currentUser);
+  const { activeMobileTab } = useChat();
 
   return (
-    <div className="w-screen h-[100dvh] flex bg-slate-950 overflow-hidden relative">
+    <div className="w-full h-[100dvh] flex bg-slate-950 overflow-hidden relative">
       
       {/* Sidebar - left */}
-      <ChatSidebar />
+      <div className={`w-full md:w-[350px] lg:w-[400px] h-full shrink-0 ${activeMobileTab === 'sidebar' ? 'block' : 'hidden md:block'}`}>
+        <ChatSidebar />
+      </div>
 
       {/* Conversation Workspace - right */}
-      <ChatWindow />
+      <div className={`flex-1 h-full min-w-0 ${activeMobileTab === 'chat' ? 'block' : 'hidden md:block'}`}>
+        <ChatWindow />
+      </div>
 
       {/* Global Incoming Call Overlay */}
       {incomingCall && (

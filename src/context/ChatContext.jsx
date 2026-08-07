@@ -103,12 +103,28 @@ export function ChatProvider({ children }) {
     }
   }, [chats]);
 
+  const [activeMobileTab, setActiveMobileTab] = useState('sidebar');
+  const [previewImage, setPreviewImage] = useState(null);
+
+  // Automatically switch tab to chat when activeChat is selected
+  useEffect(() => {
+    if (activeChat) {
+      setActiveMobileTab('chat');
+    } else {
+      setActiveMobileTab('sidebar');
+    }
+  }, [activeChat]);
+
   const value = {
     chats,
     activeChat,
     setActiveChat,
     messages,
-    chatsLoading
+    chatsLoading,
+    activeMobileTab,
+    setActiveMobileTab,
+    previewImage,
+    setPreviewImage
   };
 
   return (

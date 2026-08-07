@@ -10,12 +10,14 @@ export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [duplicateAccountConfig, setDuplicateAccountConfig] = useState(null);
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
       if (!user) {
         setUserProfile(null);
+        setDuplicateAccountConfig(null);
         setLoading(false);
       }
     });
@@ -62,15 +64,69 @@ export function AuthProvider({ children }) {
     return unsubscribeProfile;
   }, [currentUser]);
 
+  // ⚡ DETECT DUAL ACCOUNTS
+  useEffect(() => {
+    if (!currentUser?.uid || !currentUser?.email) return;
+
+    const scanDuplicateAccounts = async () => {
+      try {
+        const { collection, query, where, getDocs } = await import('firebase/firestore');
+        const usersRef = collection(db, "users");
+        const q = query(usersRef, where("email", "==", currentUser.email));
+        const querySnapshot = await getDocs(q);
+
+        let duplicateDoc = null;
+        let currentDocData = null;
+
+        querySnapshot.forEach((docSnap) => {
+          if (docSnap.id !== currentUser.uid) {
+            duplicateDoc = { id: docSnap.id, ...docSnap.data() };
+          } else {
+            currentDocData = docSnap.data();
+          }
+        });
+
+        // Trigger Modal if duplicate exists and user hasn't previously declined
+        if (duplicateDoc && !currentDocData?.mergeDeclined) {
+          setDuplicateAccountConfig(duplicateDoc);
+        }
+      } catch (error) {
+        console.error("❌ Auth duplicate scan failed:", error);
+      }
+    };
+
+    scanDuplicateAccounts();
+  }, [currentUser]);
+
   const value = {
     currentUser,
     userProfile,
-    loading
+    loading,
+    duplicateAccountConfig,
+    setDuplicateAccountConfig
   };
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {loading ? (
+        <div className="flex flex-col items-center justify-center h-[100dvh] bg-slate-950 text-white w-full select-none">
+          {/* Animated Spinner */}
+          <div className="relative flex items-center justify-center w-16 h-16 mb-4">
+            <div className="absolute w-full h-full border-4 border-slate-900 rounded-full"></div>
+            <div className="absolute w-full h-full border-4 border-teal-500 rounded-full border-t-transparent animate-spin"></div>
+          </div>
+          
+          {/* Brand / Loading Text */}
+          <h1 className="text-xl font-bold tracking-wider text-slate-200">
+            Qwik Messages
+          </h1>
+          <p className="text-xs text-slate-500 mt-2 animate-pulse">
+            Securely connecting...
+          </p>
+        </div>
+      ) : (
+        children
+      )}
     </AuthContext.Provider>
   );
 }

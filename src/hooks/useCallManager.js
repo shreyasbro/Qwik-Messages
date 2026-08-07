@@ -30,13 +30,13 @@ export function useCallManager(currentUser) {
         const callId = changeDoc.id;
         const call = { callId, ...data };
 
-        // Check if the call is still active
-        if (call.status === 'ended') {
+        // If the call has been declined or ended, ignore it and clear local states
+        if (call.status === 'ended' || call.status === 'declined') {
           return;
         }
 
-        // If the current user has already accepted and is in connectedUsers, it's their active call
-        if (call.connectedUsers?.includes(currentUser.uid)) {
+        // If the current user has already accepted and is in connectedUsers or the call is accepted, it's their active call
+        if (call.connectedUsers?.includes(currentUser.uid) || (call.status === 'accepted' && call.participants?.includes(currentUser.uid))) {
           foundActive = call;
         } 
         // If the call is ringing, user is in participants but not in connectedUsers or rejectedUsers
@@ -112,7 +112,7 @@ export function useCallManager(currentUser) {
       const callRef = doc(db, 'calls', callId);
       await updateDoc(callRef, {
         connectedUsers: arrayUnion(currentUser.uid),
-        status: 'connected', // update status to active/connected
+        status: 'accepted', // update status to active/accepted for Jitsi hot-join triggers
         updatedAt: serverTimestamp()
       });
     } catch (err) {
