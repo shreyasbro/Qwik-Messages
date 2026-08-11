@@ -15,7 +15,8 @@ export default function MessageBubble({
   isSelectMode,
   isSelected,
   onSelectToggle,
-  onStartSelectMode
+  onStartSelectMode,
+  isGroup = false
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -178,6 +179,13 @@ export default function MessageBubble({
             </div>
           )}
 
+          {/* Group Chat Sender Name Tag */}
+          {isGroup && !isMe && message.senderName && (
+            <span className="text-[10px] font-black text-teal-400 mb-1.5 block text-left uppercase tracking-wider">
+              {message.senderName}
+            </span>
+          )}
+
           {/* TEXT PAYLOAD / CONDITIONAL MEDIA RENDERER */}
           {message.messageType === "media" && message.mediaUrl ? (
             <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-950/40 border border-black/10">
@@ -220,12 +228,26 @@ export default function MessageBubble({
           {/* TIMESTAMP SHIELD */}
           {!(message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))) && (
             <div className={`flex items-center gap-1 mt-1 text-[10px] leading-none whitespace-nowrap shrink-0 self-end ${
-              isMe ? 'text-teal-950 font-bold' : 'text-slate-400'
+              isMe ? 'text-slate-950 font-bold' : 'text-slate-400'
             }`}>
               {message.isEdited && <span className="italic mr-1 text-[9px]">(edited)</span>}
               <span className="inline-block whitespace-nowrap">
                 {message.createdAt?.toDate ? message.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
               </span>
+              {isMe && (
+                <span className="ml-1 flex items-center shrink-0">
+                  {message.status === 'read' ? (
+                    <svg className="w-3.5 h-3.5 text-cyan-400 drop-shadow-[0_1px_1px_rgba(0,0,0,0.8)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 6L7 17l-5-5" />
+                      <path d="M22 10l-7.5 7.5L13 16" />
+                    </svg>
+                  ) : (
+                    <svg className="w-3.5 h-3.5 text-slate-950/80 drop-shadow-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                  )}
+                </span>
+              )}
             </div>
           )}
 

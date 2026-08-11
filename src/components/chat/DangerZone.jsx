@@ -10,7 +10,8 @@ export default function DangerZone({ isGroup = false, creatorId = null }) {
   const handleClearHistory = async () => {
     if (!window.confirm("Wipe all message logs? This cannot be undone.")) return;
     try {
-      await chatService.clearChatHistory(activeChat.chatId, currentUser.uid);
+      const targetId = activeChat?.id || activeChat?.chatId;
+      await chatService.clearChatHistory(targetId, currentUser.uid);
     } catch (e) {
       console.error("Clear logs failed:", e);
     }
@@ -19,7 +20,8 @@ export default function DangerZone({ isGroup = false, creatorId = null }) {
   const handleLeaveGroup = async () => {
     if (!window.confirm("Leave this group room?")) return;
     try {
-      await chatService.leaveGroup(activeChat.chatId, currentUser.uid);
+      const targetId = activeChat?.id || activeChat?.chatId;
+      await chatService.leaveGroup(targetId, currentUser.uid);
       setActiveChat(null);
     } catch (e) {
       console.error("Leave group failed:", e);
@@ -29,14 +31,15 @@ export default function DangerZone({ isGroup = false, creatorId = null }) {
   const handleDeleteGlobally = async () => {
     if (!window.confirm("Wipe this entire group room from all participants?")) return;
     try {
-      await chatService.deleteGroupGlobally(activeChat.chatId);
+      const targetId = activeChat?.id || activeChat?.chatId;
+      await chatService.deleteGroupGlobally(targetId);
       setActiveChat(null);
     } catch (e) {
       console.error("Delete group failed:", e);
     }
   };
 
-  const isCreator = currentUser?.uid === creatorId;
+  const isCreator = currentUser?.uid === creatorId || currentUser?.uid === activeChat?.createdBy;
 
   return (
     <div className="w-full border border-rose-500/30 bg-rose-950/10 rounded-2xl p-4 mt-6 select-none">

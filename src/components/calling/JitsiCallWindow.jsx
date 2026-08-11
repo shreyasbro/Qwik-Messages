@@ -24,16 +24,26 @@ const JitsiCallWindow = ({ callData, currentUser, onClose }) => {
     loadUsers();
   }, []);
 
-  // Sync participants list in real time to see hot-joined users
+  // Sync participants list and call state status transitions in real time
   useEffect(() => {
     if (!callData?.callId) return;
     const unsub = onSnapshot(doc(db, 'calls', callData.callId), (snapshot) => {
       if (snapshot.exists()) {
-        setCurrentParticipants(snapshot.data().participants || []);
+        const data = snapshot.data();
+        if (data.status === 'declined' || data.status === 'ended') {
+          console.log(`☎️ Call state transitioned to: ${data.status}. Hanging up...`);
+          onClose();
+          return;
+        }
+        setCurrentParticipants(data.participants || []);
+      } else {
+        // If document is deleted or missing, clean up call windows instantly
+        console.log("☎️ Call document was deleted. Disconnecting...");
+        onClose();
       }
     });
     return () => unsub();
-  }, [callData]);
+  }, [callData, onClose]);
 
   // Load Jitsi Meet External API dynamically and initialize
   useEffect(() => {
@@ -163,24 +173,21 @@ const JitsiCallWindow = ({ callData, currentUser, onClose }) => {
     <div className="fixed inset-0 w-screen h-screen bg-slate-950 z-[999999] flex flex-col relative select-none">
       
       {/* Top Floating Control Bar Overlay for Hot-Joining */}
-      <div className="absolute top-4 right-4 z-[9999999] flex items-center gap-3">
+      <div className="absolute top-4 left-4 z-[9999999] flex items-center justify-start pointer-events-none w-full">
         <button 
           onClick={() => setShowAddGuest(!showAddGuest)}
-          className="px-4 py-2 bg-gradient-to-r from-emerald-400 to-teal-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+          className="pointer-events-auto flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-400 to-teal-400 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xl hover:opacity-90 active:scale-95 transition-all cursor-pointer"
         >
-          ➕ Add Member to Call
-        </button>
-        <button
-          onClick={onClose}
-          className="px-4 py-2 text-xs font-black uppercase tracking-wider bg-rose-950/20 hover:bg-rose-950/40 text-rose-400 hover:text-rose-300 border border-rose-900 rounded-xl transition-colors cursor-pointer"
-        >
-          Disconnect Call
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+          ADD MEMBER TO CALL
         </button>
       </div>
 
       {/* Guest Injection Search Dropdown Panel */}
       {showAddGuest && (
-        <div className="absolute top-16 right-4 z-[9999999] w-64 bg-[#0B111E] border border-slate-800 rounded-2xl shadow-2xl p-3 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-3 duration-200">
+        <div className="absolute top-16 left-4 z-[9999999] w-64 bg-[#0B111E] border border-slate-800 rounded-2xl shadow-2xl p-3 max-h-60 overflow-y-auto animate-in fade-in slide-in-from-top-3 duration-200">
           <h3 className="text-xs font-black text-white uppercase tracking-wider mb-2 px-1">Invite online contacts:</h3>
           {/* Loop over available app users to invite */}
           {allUsers.filter(u => u.uid !== currentUser?.uid).map((user) => (

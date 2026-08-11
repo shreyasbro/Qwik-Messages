@@ -8,12 +8,18 @@ import { safeString } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
 import ProfileEditorModal from '../profile/ProfileEditorModal';
 import SupportFAQ from './SupportFAQ';
+import CreateGroupModal from './CreateGroupModal';
 
 function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
-  const { recipient } = useRecipient(chat.participants, currentUser?.uid);
-  const chatName = recipient?.displayName || 'Loading...';
-  const avatarSrc = recipient?.photoURL || userService.resolveAvatar({ displayName: chatName });
-  const isActive = activeChat?.chatId === chat.chatId;
+  const isGroup = chat.isGroup || chat.type === 'group';
+  const { recipient } = useRecipient(isGroup ? [] : chat.participants, currentUser?.uid);
+  
+  const chatName = isGroup ? chat.groupName : (recipient?.displayName || 'Loading...');
+  const avatarSrc = isGroup 
+    ? (chat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(chatName)}&background=0d9488&color=fff&bold=true`) 
+    : (recipient?.photoURL || userService.resolveAvatar({ displayName: chatName }));
+    
+  const isActive = activeChat?.chatId === chat.chatId || activeChat?.id === chat.id;
 
   // Real-time typing status tracking state
   const [isTyping, setIsTyping] = React.useState(false);
@@ -34,6 +40,22 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   return (
     <div
       onClick={() => {
+        if (isGroup) {
+          setActiveChat({
+            id: chat.id || chat.chatId,
+            chatId: chat.id || chat.chatId,
+            groupName: chatName,
+            groupAvatar: chat.groupAvatar || null,
+            groupDescription: chat.groupDescription || '',
+            admins: chat.admins || [chat.createdBy],
+            onlyAdminsCanMessage: chat.onlyAdminsCanMessage || false,
+            participants: chat.participants,
+            createdBy: chat.createdBy,
+            isGroup: true,
+            type: 'group'
+          });
+          return;
+        }
         if (!recipient) return;
         setActiveChat({
           chatId: chat.chatId,
@@ -130,9 +152,22 @@ export default function ChatSidebar() {
   const { chats, activeChat, setActiveChat, chatsLoading, setPreviewImage } = useChat();
   const { currentUser, userProfile } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isGroupCreateOpen, setIsGroupCreateOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsView, setSettingsView] = useState("main"); // 'main' | 'privacy'
+  const [showAddMenu, setShowAddMenu] = useState(false);
+  const addMenuRef = React.useRef(null);
+
+  React.useEffect(() => {
+    const handleOutsideClick = (e) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+        setShowAddMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
   const [privacySettings, setPrivacySettings] = useState({
     lastSeen: "everyone",     // 'everyone' | 'contacts' | 'nobody' | 'specific'
     profilePhoto: "contacts", // 'everyone' | 'contacts' | 'nobody' | 'specific'
@@ -162,17 +197,22 @@ export default function ChatSidebar() {
     setSettingsView("main");
   };
  
-  // Clean Deduplication Logic for 1-on-1 Chats in Sidebar
+  // Clean Deduplication Logic for 1-on-1 Chats in Sidebar, preserving Groups
   const deduplicatedChats = useMemo(() => {
     if (!Array.isArray(chats)) return [];
     
     const uniqueRooms = new Map();
+    const groupRooms = [];
     
     chats.forEach((chat) => {
+      if (chat.isGroup || chat.type === 'group') {
+        groupRooms.push(chat);
+        return;
+      }
       // Find the recipient's UID in a 1-on-1 chat
       const targetId = chat.participants?.find(id => id !== currentUser?.uid);
       if (!targetId) return; // Skip invalid rooms
-
+ 
       if (!uniqueRooms.has(targetId)) {
         uniqueRooms.set(targetId, chat);
       } else {
@@ -180,7 +220,7 @@ export default function ChatSidebar() {
         const existing = uniqueRooms.get(targetId);
         const currentHasMessage = typeof chat.lastMessage === 'string' && chat.lastMessage.trim() !== '';
         const existingHasMessage = typeof existing.lastMessage === 'string' && existing.lastMessage.trim() !== '';
-
+ 
         if (currentHasMessage && !existingHasMessage) {
           uniqueRooms.set(targetId, chat);
         } else if (chat.updatedAt && existing.updatedAt && chat.updatedAt > existing.updatedAt) {
@@ -188,8 +228,8 @@ export default function ChatSidebar() {
         }
       }
     });
-
-    return Array.from(uniqueRooms.values());
+ 
+    return [...groupRooms, ...Array.from(uniqueRooms.values())];
   }, [chats, currentUser]);
 
   const handleLogout = async () => {
@@ -256,15 +296,47 @@ export default function ChatSidebar() {
             </svg>
           </button>
 
-          {/* New Chat Button */}
-          <button
-            onClick={() => setIsSearchOpen(true)}
-            className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-emerald-400 flex items-center justify-center transition-colors border border-slate-800 font-bold cursor-pointer"
-            title="Start new conversation"
-          >
-            ＋
-          </button>
-          
+          {/* Actions Dropdown Container */}
+          <div className="relative font-sans text-left" ref={addMenuRef}>
+            <button
+              onClick={() => setShowAddMenu(!showAddMenu)}
+              className="w-8 h-8 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-emerald-400 flex items-center justify-center transition-colors border border-slate-800 font-bold cursor-pointer text-lg"
+              title="Add Chat Options"
+            >
+              +
+            </button>
+            
+            {showAddMenu && (
+              <div className="absolute right-0 mt-2.5 w-56 rounded-2xl bg-[#0B111E] border border-slate-800 shadow-2xl z-[999] overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150">
+                <div className="py-1">
+                  {/* Start DM */}
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      setIsSearchOpen(true);
+                    }}
+                    className="flex items-center w-full px-4 py-3 text-xs font-bold text-slate-200 hover:bg-slate-800 hover:text-teal-400 transition-colors text-left gap-3 cursor-pointer"
+                  >
+                    <span className="text-teal-400 text-sm">💬</span>
+                    New Direct Message
+                  </button>
+
+                  {/* Create Group */}
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      setIsGroupCreateOpen(true);
+                    }}
+                    className="flex items-center w-full px-4 py-3 text-xs font-bold text-slate-200 hover:bg-slate-800 hover:text-emerald-400 transition-colors text-left border-t border-slate-800/80 gap-3 cursor-pointer"
+                  >
+                    <span className="text-emerald-400 text-sm">👥</span>
+                    Create New Group
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Logout Button */}
           <button
             onClick={handleLogout}
@@ -292,7 +364,7 @@ export default function ChatSidebar() {
         ) : (
           deduplicatedChats.map((c) => (
             <ChatListItem
-              key={c.chatId}
+              key={c.id || c.chatId || c.roomId || Math.random().toString()}
               chat={c}
               currentUser={currentUser}
               activeChat={activeChat}
@@ -305,6 +377,9 @@ export default function ChatSidebar() {
 
       {/* Start Chat Modal */}
       <UserSearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+
+      {/* Create Group Modal */}
+      <CreateGroupModal isOpen={isGroupCreateOpen} onClose={() => setIsGroupCreateOpen(false)} />
 
       {/* Profile Editor Modal */}
       <ProfileEditorModal 

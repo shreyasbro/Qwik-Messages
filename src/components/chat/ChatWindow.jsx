@@ -11,13 +11,15 @@ import MessageBubble from './MessageBubble';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { auth, db } from '../../firebaseConfig';
-import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, arrayUnion, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
+import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, arrayUnion, arrayRemove, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
 import axios from 'axios';
 import JitsiCallRoom from '../JitsiCallRoom';
+import UserSearchModal from './UserSearchModal';
+import AddToGroupModal from './AddToGroupModal';
 
 export default function ChatWindow() {
   const { activeChat, setActiveChat, setPreviewImage } = useChat();
-  const { currentUser } = useAuth();
+  const { currentUser, userProfile: currentUserProfile } = useAuth();
 
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -30,6 +32,12 @@ export default function ChatWindow() {
   const [selectedMessageIds, setSelectedMessageIds] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [activeCall, setActiveCall] = useState({ active: false, type: null }); // type can be 'audio' or 'video'
+  const [isGroupSearchOpen, setIsGroupSearchOpen] = useState(false);
+  const [showAddToGroupModal, setShowAddToGroupModal] = useState(false);
+  const [isEditingDesc, setIsEditingDesc] = useState(false);
+  const [newGroupDesc, setNewGroupDesc] = useState('');
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
   const messagesEndRef = useRef(null);
   
   // Media upload features states
@@ -216,9 +224,77 @@ export default function ChatWindow() {
     };
   }, [activeChat]);
 
-  const { recipient } = useRecipient(activeChat?.participants, currentUser?.uid);
-  const recipientName = recipient?.displayName || activeChat?.recipient?.displayName || 'User';
-  const avatarSrc = recipient?.photoURL || userService.resolveAvatar(activeChat?.recipient);
+  useEffect(() => {
+    setNewGroupDesc(activeChat?.groupDescription || '');
+    setIsEditingDesc(false);
+  }, [activeChat?.groupDescription, activeChat?.id]);
+
+  useEffect(() => {
+    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!roomId || !messages || messages.length === 0 || !currentUser?.uid) return;
+
+    const unread = messages.filter(
+      (m) => m.senderId !== currentUser.uid && m.status !== 'read'
+    );
+
+    if (unread.length === 0) return;
+
+    unread.forEach(async (m) => {
+      try {
+        const msgRef = doc(db, 'chats', roomId, 'messages', m.id);
+        if (m.senderId !== currentUser.uid) {
+          await setDoc(msgRef, { status: 'read' }, { merge: true });
+        }
+      } catch (err) {
+        console.error("Error updating read receipt status:", err);
+      }
+    });
+  }, [messages, activeChat, currentUser?.uid]);
+
+  useEffect(() => {
+    setNewGroupName(activeChat?.groupName || '');
+    setIsEditingName(false);
+  }, [activeChat?.groupName, activeChat?.id]);
+
+  const isGroupChat = activeChat?.isGroup || activeChat?.type === 'group';
+
+  const [resolvedMembers, setResolvedMembers] = useState({});
+
+  useEffect(() => {
+    if (!activeChat || !activeChat.participants || !isGroupChat) {
+      setResolvedMembers({});
+      return;
+    }
+    const fetchMembers = async () => {
+      try {
+        const users = await userService.getAllUsers();
+        const mapping = {};
+        users.forEach(u => {
+          if (activeChat.participants.includes(u.uid)) {
+            mapping[u.uid] = {
+              displayName: u.displayName || u.email?.split('@')[0] || 'User',
+              photoURL: u.photoURL || userService.resolveAvatar(u),
+              email: u.email
+            };
+          }
+        });
+        setResolvedMembers(mapping);
+      } catch (err) {
+        console.error("Error resolving group profiles:", err);
+      }
+    };
+    fetchMembers();
+  }, [activeChat, activeChat?.participants]);
+
+  const { recipient } = useRecipient(isGroupChat ? [] : activeChat?.participants, currentUser?.uid);
+  
+  const recipientName = isGroupChat 
+    ? (activeChat.groupName || 'Group Chat') 
+    : (recipient?.displayName || activeChat?.recipient?.displayName || 'User');
+    
+  const avatarSrc = isGroupChat 
+    ? (activeChat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(recipientName)}&background=0d9488&color=fff&bold=true`) 
+    : (recipient?.photoURL || userService.resolveAvatar(activeChat?.recipient));
 
   // Filter messages not deleted for current user
   const safeMessages = messages.filter(m => !m.deletedFor?.includes(currentUser?.uid));
@@ -273,7 +349,8 @@ export default function ChatWindow() {
           createdAt: serverTimestamp(),
           timestamp: serverTimestamp(),
           deletedFor: [],
-          isEdited: false
+          isEdited: false,
+          status: 'sent'
         };
         if (replyingTo) {
           msgPayload.replyTo = {
@@ -510,12 +587,14 @@ export default function ChatWindow() {
               />
             </div>
 
-            <div className="min-w-0">
+            <div className="min-w-0 text-left">
               <h3 className="text-sm font-black text-white group-hover:text-teal-400 transition-colors truncate">
                 {safeString(recipientName, 'Chat Member')}
               </h3>
               <p className="text-[10px] text-slate-300 font-medium truncate">
-                Direct Secure Connection
+                {isGroupChat 
+                  ? `${activeChat.participants?.length || 0} members` 
+                  : "Direct Secure Connection"}
               </p>
             </div>
           </div>
@@ -523,7 +602,10 @@ export default function ChatWindow() {
           <div className="flex items-center gap-3.5">
             {/* AUDIO CALL BUTTON */}
             <button 
-              onClick={() => setActiveCall({ active: true, type: 'audio' })}
+              onClick={() => {
+                console.log("☎️ Initiating Audio Call for:", activeChat);
+                initiateCall(activeChat, 'audio');
+              }}
               className="p-2 rounded-xl bg-slate-900/60 border border-slate-800 text-emerald-400 hover:bg-slate-800 hover:text-emerald-300 transition-colors cursor-pointer flex items-center justify-center"
               title="Voice Call"
             >
@@ -534,7 +616,10 @@ export default function ChatWindow() {
 
             {/* VIDEO CALL BUTTON */}
             <button 
-              onClick={() => setActiveCall({ active: true, type: 'video' })}
+              onClick={() => {
+                console.log("📹 Initiating Video Call for:", activeChat);
+                initiateCall(activeChat, 'video');
+              }}
               className="p-2 rounded-xl bg-slate-900/60 border border-slate-800 text-cyan-400 hover:bg-slate-800 hover:text-cyan-300 transition-colors cursor-pointer flex items-center justify-center"
               title="Video Call"
             >
@@ -543,6 +628,22 @@ export default function ChatWindow() {
                 <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
               </svg>
             </button>
+
+            {/* ADD MEMBER BUTTON */}
+            {!isGroupChat && (
+              <button 
+                onClick={() => setShowAddToGroupModal(true)}
+                className="p-2 rounded-xl bg-slate-900/60 border border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer flex items-center justify-center"
+                title="Add to a Group"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                  <circle cx="8.5" cy="7" r="4"></circle>
+                  <line x1="20" y1="8" x2="20" y2="14"></line>
+                  <line x1="23" y1="11" x2="17" y2="11"></line>
+                </svg>
+              </button>
+            )}
           </div>
         </div>
 
@@ -670,6 +771,7 @@ export default function ChatWindow() {
                         isSelected={selectedMessageIds.includes(m.id)}
                         onSelectToggle={handleSelectToggle}
                         onStartSelectMode={handleStartSelectMode}
+                        isGroup={isGroupChat}
                       />
                     </React.Fragment>
                   );
@@ -738,101 +840,156 @@ export default function ChatWindow() {
             </div>
           )}
 
-          <div className="flex items-center gap-1.5 w-full px-2 py-2.5 sm:px-4 bg-[#0B111E] border-t border-slate-900/60 box-border">
-            {/* Attachment Clip */}
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              onChange={handleFileChange} 
-              accept=".mp4,.mp3,.png,.jpg,.jpeg,.webm" 
-              className="hidden" 
-            />
-            <button 
-              type="button" 
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
-                isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
-              }`}
-              title="Add Attachment"
-            >
-              {isUploading ? "⏳" : "📎"}
-            </button>
+          {/* CONDITIONAL MESSAGE INPUT COMPONENT */}
+          {(() => {
+            const hasBlocked = currentUserProfile?.blockedUsers?.includes(recipient?.uid);
+            const amIBlocked = recipient?.blockedUsers?.includes(currentUser?.uid);
 
-            {/* Emoji Trigger */}
-            <div className="relative flex items-center flex-shrink-0">
-              <motion.button
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
-                type="button"
-                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                className="w-9 h-9 bg-slate-900/60 border border-slate-800 rounded-full flex items-center justify-center hover:text-amber-400 transition-colors text-xs cursor-pointer"
-                title="Select Emoji"
-              >
-                😀
-              </motion.button>
-              {showEmojiPicker && (
-                <div className="absolute bottom-14 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
-                  <EmojiPicker 
-                    theme={Theme.DARK} 
-                    emojiStyle={EmojiStyle.GOOGLE}
-                    onEmojiClick={(emojiData) => {
-                      setInputText((prev) => prev + emojiData.emoji);
-                      setShowEmojiPicker(false);
-                    }}
-                    lazyLoadEmojis={true}
-                  />
+            if (amIBlocked) {
+              return (
+                <div className="p-4 bg-[#0B111E] border-t border-slate-900/60 w-full text-center">
+                  <div className="text-xs font-semibold text-slate-400 bg-slate-950/40 border border-slate-900 p-3.5 rounded-xl italic">
+                    {recipientName || "This user"} has blocked you.
+                  </div>
                 </div>
-              )}
-            </div>
+              );
+            }
 
-            <form onSubmit={handleSendMessage} className="flex-1 flex gap-1.5 items-center min-w-0">
-              <input
-                type="text"
-                placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type your message...")}
-                disabled={isUploading}
-                value={inputText}
-                onChange={(e) => {
-                  setInputText(e.target.value);
-                }}
-                className="flex-1 min-w-0 bg-slate-900/60 border border-slate-800/80 text-white rounded-full px-4 py-2 text-sm focus:outline-none focus:border-teal-500 transition-all placeholder-slate-500 shadow-inner disabled:opacity-60 disabled:cursor-not-allowed"
-              />
-              
-              {/* Actions Group - Mic & Send Button */}
-              <div className="flex items-center gap-1.5 flex-shrink-0 pl-1 pr-1 sm:pr-0">
-                {/* Mic / Voice Note */}
-                <button 
-                  type="button"
-                  onClick={() => alert("🎤 Voice messaging feature is coming soon!")}
-                  className="w-9 h-9 rounded-full bg-slate-900/60 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
-                  title="Record Voice Note"
-                >
-                  🎤
-                </button>
+            if (hasBlocked) {
+              return (
+                <div className="p-4 bg-[#0B111E] border-t border-slate-900/60 w-full text-center">
+                  <div className="text-xs font-semibold text-slate-400 bg-slate-950/40 border border-slate-900 p-3.5 rounded-xl">
+                    You blocked this user.{" "}
+                    <button 
+                      onClick={async () => {
+                        try {
+                          const currentUserRef = doc(db, "users", currentUser.uid);
+                          await setDoc(currentUserRef, {
+                            blockedUsers: arrayRemove(recipient.uid)
+                          }, { merge: true });
+                          console.log("Unblocked user:", recipient.uid);
+                        } catch (err) {
+                          console.error("Unblock failed:", err);
+                        }
+                      }}
+                      className="text-teal-400 hover:text-teal-300 font-bold underline cursor-pointer ml-1"
+                    >
+                      Unblock to send messages.
+                    </button>
+                  </div>
+                </div>
+              );
+            }
 
-                <button
-                  type="submit"
-                  className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2 rounded-full transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer w-9 h-9"
-                  title={editingMessage ? 'Save Message' : 'Send Message'}
-                >
-                  <svg 
-                    className="w-4 h-4 transform rotate-45 -translate-x-0.5" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    viewBox="0 0 24 24" 
-                    xmlns="http://www.w3.org/2000/svg"
-                  >
-                    <path 
-                      strokeLinecap="round" 
-                      strokeLinejoin="round" 
-                      strokeWidth="2.5" 
-                      d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                    ></path>
+            if (isGroupChat && activeChat.onlyAdminsCanMessage && !(activeChat.admins || []).includes(currentUser.uid)) {
+              return (
+                <div className="w-full p-4 bg-slate-950 border-t border-slate-900 text-center text-slate-400 italic rounded-xl flex items-center justify-center gap-2 font-sans select-none">
+                  <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
+                  Only admins can send messages
+                </div>
+              );
+            }
+
+            return (
+              <div className="flex items-center gap-1.5 w-full px-2 py-2.5 sm:px-4 bg-[#0B111E] border-t border-slate-900/60 box-border">
+                {/* Attachment Clip */}
+                <input 
+                  type="file" 
+                  ref={fileInputRef} 
+                  onChange={handleFileChange} 
+                  accept=".mp4,.mp3,.png,.jpg,.jpeg,.webm" 
+                  className="hidden" 
+                />
+                <button 
+                  type="button" 
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploading}
+                  className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
+                    isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
+                  }`}
+                  title="Add Attachment"
+                >
+                  {isUploading ? "⏳" : "📎"}
                 </button>
+
+                {/* Emoji Trigger */}
+                <div className="relative flex items-center flex-shrink-0">
+                  <motion.button
+                    whileHover={{ scale: 1.1 }}
+                    whileTap={{ scale: 0.9 }}
+                    type="button"
+                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                    className="w-9 h-9 bg-slate-900/60 border border-slate-800 rounded-full flex items-center justify-center hover:text-amber-400 transition-colors text-xs cursor-pointer"
+                    title="Select Emoji"
+                  >
+                    😀
+                  </motion.button>
+                  {showEmojiPicker && (
+                    <div className="absolute bottom-14 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
+                      <EmojiPicker 
+                        theme={Theme.DARK} 
+                        emojiStyle={EmojiStyle.GOOGLE}
+                        onEmojiClick={(emojiData) => {
+                          setInputText((prev) => prev + emojiData.emoji);
+                          setShowEmojiPicker(false);
+                        }}
+                        lazyLoadEmojis={true}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <form onSubmit={handleSendMessage} className="flex-1 flex gap-1.5 items-center min-w-0">
+                  <input
+                    type="text"
+                    placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type your message...")}
+                    disabled={isUploading}
+                    value={inputText}
+                    onChange={(e) => {
+                      setInputText(e.target.value);
+                    }}
+                    className="flex-1 min-w-0 bg-slate-900/60 border border-slate-800/80 text-white rounded-full px-4 py-2 text-sm focus:outline-none focus:border-teal-500 transition-all placeholder-slate-500 shadow-inner disabled:opacity-60 disabled:cursor-not-allowed"
+                  />
+                  
+                  {/* Actions Group - Mic & Send Button */}
+                  <div className="flex items-center gap-1.5 flex-shrink-0 pl-1 pr-1 sm:pr-0">
+                    {/* Mic / Voice Note */}
+                    <button 
+                      type="button"
+                      onClick={() => alert("🎤 Voice messaging feature is coming soon!")}
+                      className="w-9 h-9 rounded-full bg-slate-900/60 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                      title="Record Voice Note"
+                    >
+                      🎤
+                    </button>
+
+                    <button
+                      type="submit"
+                      className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2 rounded-full transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer w-9 h-9"
+                      title={editingMessage ? 'Save Message' : 'Send Message'}
+                    >
+                      <svg 
+                        className="w-4 h-4 transform rotate-45 -translate-x-0.5" 
+                        fill="none" 
+                        stroke="currentColor" 
+                        viewBox="0 0 24 24" 
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round" 
+                          strokeWidth="2.5" 
+                          d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                        ></path>
+                      </svg>
+                    </button>
+                  </div>
+                </form>
               </div>
-            </form>
-          </div>
+            );
+          })()}
         </div>
 
       </div>
@@ -856,77 +1013,467 @@ export default function ChatWindow() {
             </button>
           </div>
 
-          <div className="text-center mb-6 border-b border-slate-900 pb-6">
-            <img 
-              src={avatarSrc} 
-              alt={safeString(recipientName)} 
-              title="View profile picture"
-              onClick={(e) => {
-                e.stopPropagation();
-                setPreviewImage(avatarSrc);
-              }}
-              className="w-20 h-20 rounded-full mx-auto object-cover border-2 border-emerald-500/20 shadow-lg mb-3 cursor-pointer hover:scale-105 transition-transform" 
-            />
-            <h4 className="text-white font-black text-lg">{safeString(recipientName, 'Chat Member')}</h4>
-            <p className="text-xs text-slate-300 truncate font-semibold">{safeString(recipient?.email || activeChat.recipient?.email, 'No email synced')}</p>
-          </div>
-
-          <div className="flex-1">
-            {/* ABOUT & ACTIVITY SECTION (Replaces old Connection Metadata) */}
-            <div className="space-y-2 mb-6 w-full text-left">
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 pl-1">About & Activity</h3>
-              
-              <div className="bg-slate-900/60 border border-slate-800/60 p-4 rounded-2xl flex flex-col gap-4">
-                
-                {/* User Bio / About */}
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Bio</p>
-                  <p className="text-sm text-slate-300 font-medium leading-relaxed">
-                    {recipient?.bio || "Hey there! I am using Qwik Messages."}
-                  </p>
-                </div>
-
-                {/* Subtle Divider */}
-                <div className="h-px w-full bg-slate-800/50"></div>
-
-                {/* Last Active Status */}
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Last Active</p>
-                  <div className="flex items-center gap-2.5">
-                    {recipient?.status === 'ONLINE' || recipient?.isOnline ? (
-                      <>
-                        <span className="relative flex h-2.5 w-2.5 shrink-0">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
-                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal-500"></span>
-                        </span>
-                        <span className="text-sm font-bold text-teal-400">Online Now</span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="inline-flex rounded-full h-2.5 w-2.5 bg-slate-600 shrink-0"></span>
-                        <span className="text-sm font-medium text-slate-400">
-                          {recipient?.lastActive ? `Last seen ${recipient.lastActive}` : "Last seen recently"}
-                        </span>
-                      </>
+          {isGroupChat ? (
+            /* GROUP DETAILS DISPLAY */
+            <div className="text-center mb-6 border-b border-slate-900 pb-6">
+              <div className="relative w-20 h-20 mx-auto mb-3 group/avatar">
+                {activeChat.groupAvatar ? (
+                  <img 
+                    src={activeChat.groupAvatar} 
+                    alt="Group Avatar" 
+                    className="w-20 h-20 rounded-2xl object-cover border border-slate-800"
+                  />
+                ) : (
+                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-slate-950 font-black text-3xl shadow-lg">
+                    👥
+                  </div>
+                )}
+                {(activeChat.admins || []).includes(currentUser.uid) && (
+                  <label className="absolute inset-0 bg-black/60 rounded-2xl opacity-0 group-hover/avatar:opacity-100 transition-opacity flex items-center justify-center cursor-pointer text-white text-[10px] font-bold">
+                    Edit
+                    <input 
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        try {
+                          const formData = new FormData();
+                          formData.append("file", file);
+                          
+                          // Request upload signature
+                          const API_BASE_URL = "https://qwik-messages.vercel.app";
+                          const signRes = await axios.get(`${API_BASE_URL}/api/get-upload-signature`);
+                          if (!signRes.data.success) throw new Error("Signature error");
+                          
+                          const { signature, timestamp, cloudName, apiKey, folder } = signRes.data;
+                          
+                          const uploadData = new FormData();
+                          uploadData.append("file", file);
+                          uploadData.append("api_key", apiKey);
+                          uploadData.append("timestamp", timestamp);
+                          uploadData.append("signature", signature);
+                          uploadData.append("folder", folder);
+                          
+                          const uploadRes = await axios.post(
+                            `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                            uploadData
+                          );
+                          
+                          if (uploadRes.data.secure_url) {
+                            const chatDocRef = doc(db, "chats", activeChat.id);
+                            await setDoc(chatDocRef, {
+                              groupAvatar: uploadRes.data.secure_url,
+                              updatedAt: serverTimestamp()
+                            }, { merge: true });
+                            setActiveChat(prev => ({ ...prev, groupAvatar: uploadRes.data.secure_url }));
+                            alert("Group profile picture updated successfully!");
+                          }
+                        } catch (err) {
+                          console.error("Group DP upload failed:", err);
+                          alert("Failed to upload group profile picture.");
+                        }
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+               <div className="flex flex-col items-center mt-3 mb-4 w-full px-4">
+                {isEditingName ? (
+                  <div className="flex flex-col items-center gap-2.5 w-full animate-fade-in">
+                    <input
+                      type="text"
+                      value={newGroupName}
+                      onChange={(e) => setNewGroupName(e.target.value)}
+                      className="w-full max-w-[220px] bg-slate-950 border border-slate-800 text-white font-black text-center rounded-xl px-3 py-1.5 outline-none focus:border-teal-500 text-sm"
+                      autoFocus
+                    />
+                    <div className="flex justify-center gap-4">
+                      <button 
+                        onClick={() => {
+                          setIsEditingName(false);
+                          setNewGroupName(activeChat.groupName || '');
+                        }}
+                        className="text-[9px] font-bold text-slate-400 hover:text-rose-400 transition-colors uppercase py-0.5"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={async () => {
+                          if (newGroupName.trim() === (activeChat.groupName || '') || !newGroupName.trim()) {
+                            setIsEditingName(false);
+                            return;
+                          }
+                          try {
+                            const chatDocRef = doc(db, "chats", activeChat.id);
+                            await setDoc(chatDocRef, {
+                              groupName: newGroupName.trim(),
+                              updatedAt: serverTimestamp()
+                            }, { merge: true });
+                            setActiveChat(prev => ({ ...prev, groupName: newGroupName.trim() }));
+                            setIsEditingName(false);
+                          } catch (err) {
+                            console.error("Rename group failed:", err);
+                            alert("Failed to save group name.");
+                          }
+                        }}
+                        className="text-[9px] font-bold text-teal-400 hover:text-teal-300 transition-colors uppercase py-0.5"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-2">
+                    <h4 className="text-white font-black text-lg">{recipientName}</h4>
+                    {(activeChat.admins || []).includes(currentUser.uid) && (
+                      <button 
+                        onClick={() => setIsEditingName(true)} 
+                        className="text-[9px] font-bold text-teal-400 hover:text-teal-350 cursor-pointer ml-1"
+                        title="Rename Group"
+                      >
+                        Edit
+                      </button>
                     )}
                   </div>
-                </div>
+                )}
 
+                {!isEditingName && (
+                  <p className="text-xs text-slate-400 font-semibold mt-1">Group Workspace</p>
+                )}
+              </div>  
+                 {/* Group Description */}
+              <div className="mt-4 px-4 py-2.5 rounded-xl bg-slate-900/60 border border-slate-800/80 text-left">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">Group Description</span>
+                  {(activeChat.admins || []).includes(currentUser.uid) && !isEditingDesc && (
+                    <button
+                      onClick={() => setIsEditingDesc(true)}
+                      className="text-[9px] font-bold text-teal-400 hover:text-teal-350 cursor-pointer"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </div>
+                {isEditingDesc ? (
+                  <div className="flex flex-col gap-2 mt-1.5 animate-fade-in">
+                    <textarea
+                      value={newGroupDesc}
+                      onChange={(e) => setNewGroupDesc(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-xl p-2.5 text-xs outline-none focus:border-teal-500 resize-none custom-scrollbar"
+                      rows="3"
+                      placeholder="Add a description for this group..."
+                      autoFocus
+                    />
+                    <div className="flex justify-end gap-2.5">
+                      <button 
+                        onClick={() => {
+                          setIsEditingDesc(false);
+                          setNewGroupDesc(activeChat.groupDescription || '');
+                        }} 
+                        className="text-[9px] font-bold text-slate-400 hover:text-rose-400 transition-colors uppercase px-1.5 py-1"
+                      >
+                        Cancel
+                      </button>
+                      <button 
+                        onClick={async () => {
+                          if (newGroupDesc.trim() === (activeChat.groupDescription || '')) {
+                            setIsEditingDesc(false);
+                            return;
+                          }
+                          try {
+                            const chatDocRef = doc(db, "chats", activeChat.id);
+                            await setDoc(chatDocRef, {
+                              groupDescription: newGroupDesc.trim(),
+                              updatedAt: serverTimestamp()
+                            }, { merge: true });
+                            setActiveChat(prev => ({ ...prev, groupDescription: newGroupDesc.trim() }));
+                            setIsEditingDesc(false);
+                          } catch (err) {
+                            console.error("Save group desc failed:", err);
+                            alert("Failed to save description.");
+                          }
+                        }} 
+                        className="text-[9px] font-bold bg-teal-500/10 text-teal-400 border border-teal-500/20 hover:bg-teal-500 hover:text-slate-950 transition-all uppercase px-3 py-1 rounded-lg"
+                      >
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-300 leading-relaxed font-medium whitespace-pre-wrap">
+                    {activeChat.groupDescription || <span className="italic text-slate-500">No description set for this group yet.</span>}
+                  </p>
+                )}
               </div>
             </div>
+          ) : (
+            /* 1V1 DM DISPLAY */
+            <div className="text-center mb-6 border-b border-slate-900 pb-6">
+              <img 
+                src={avatarSrc} 
+                alt={safeString(recipientName)} 
+                title="View profile picture"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPreviewImage(avatarSrc);
+                }}
+                className="w-20 h-20 rounded-full mx-auto object-cover border-2 border-emerald-500/20 shadow-lg mb-3 cursor-pointer hover:scale-105 transition-transform" 
+              />
+              <h4 className="text-white font-black text-lg">{safeString(recipientName, 'Chat Member')}</h4>
+              <p className="text-xs text-slate-300 truncate font-semibold">{safeString(recipient?.email || activeChat.recipient?.email, 'No email synced')}</p>
+            </div>
+          )}
+
+          <div className="flex-1">
+            {isGroupChat ? (
+              /* GROUP MEMBERS LIST */
+              <div className="space-y-4 mb-6 w-full text-left">
+                <div className="flex items-center justify-between pl-1">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500">Group Members</h3>
+                  {(activeChat.admins || []).includes(currentUser.uid) && (
+                    <button
+                      onClick={() => setIsGroupSearchOpen(true)}
+                      className="text-[10px] font-black text-teal-400 hover:text-teal-300 uppercase tracking-wider cursor-pointer"
+                    >
+                      + Add Member
+                    </button>
+                  )}
+                </div>
+
+                <div className="bg-slate-900/60 border border-slate-800/60 p-3 rounded-2xl flex flex-col gap-2 max-h-60 overflow-y-auto custom-scrollbar">
+                  {(activeChat.participants || []).map((uid) => {
+                    const adminsList = activeChat.admins || [];
+                    const isUserAdmin = adminsList.includes(uid);
+                    const amIGroupAdmin = adminsList.includes(currentUser.uid);
+                    const resolved = resolvedMembers[uid];
+                    const memberName = resolved ? resolved.displayName : uid.substring(0, 10);
+                    const memberAvatar = resolved?.photoURL || `https://ui-avatars.com/api/?name=${encodeURIComponent(memberName)}&background=0f172a&color=cbd5e1`;
+                    return (
+                      <div key={uid} className="flex items-center justify-between p-2 rounded-xl bg-slate-950/40 border border-slate-900/50">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img 
+                            src={memberAvatar} 
+                            alt="" 
+                            className="w-6 h-6 rounded-full border border-slate-800 object-cover"
+                          />
+                          <div className="truncate text-left">
+                            <p className="text-xs font-bold text-white truncate">
+                              {uid === currentUser.uid ? `${memberName} (You)` : memberName}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {isUserAdmin && (
+                            <span className="text-[8px] font-black bg-teal-500/20 text-teal-400 border border-teal-500/30 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                              Admin
+                            </span>
+                          )}
+                          {amIGroupAdmin && uid !== currentUser.uid && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const chatDocRef = doc(db, "chats", activeChat.id);
+                                  if (isUserAdmin) {
+                                    await setDoc(chatDocRef, {
+                                      admins: arrayRemove(uid)
+                                    }, { merge: true });
+                                    setActiveChat(prev => ({ ...prev, admins: (prev.admins || []).filter(id => id !== uid) }));
+                                  } else {
+                                    await setDoc(chatDocRef, {
+                                      admins: arrayUnion(uid)
+                                    }, { merge: true });
+                                    setActiveChat(prev => ({ ...prev, admins: [...(prev.admins || []), uid] }));
+                                  }
+                                } catch (err) {
+                                  console.error("Failed to toggle admin role:", err);
+                                }
+                              }}
+                              className="text-[9px] text-teal-400 hover:underline cursor-pointer font-bold"
+                            >
+                              {isUserAdmin ? "Dismiss" : "Promote"}
+                            </button>
+                          )}
+                          {!isUserAdmin && amIGroupAdmin && (
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm("Kick this member from the group?")) return;
+                                try {
+                                  const chatDocRef = doc(db, "chats", activeChat.id);
+                                  await setDoc(chatDocRef, {
+                                    participants: arrayRemove(uid)
+                                  }, { merge: true });
+                                  console.log("Removed member from group:", uid);
+                                } catch (err) {
+                                  console.error("Remove member failed:", err);
+                                }
+                              }}
+                              className="text-[9px] font-bold text-rose-500 hover:text-rose-400 cursor-pointer"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Only Admins Can Message Toggle Switch */}
+                {(activeChat.admins || []).includes(currentUser.uid) && (
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-900/60 border border-slate-800/60 mt-4 select-none">
+                    <div className="text-left">
+                      <p className="text-xs font-bold text-white">Only Admins Can Message</p>
+                      <p className="text-[9px] text-slate-400">Restrict normal members from posting texts.</p>
+                    </div>
+                    <input 
+                      type="checkbox"
+                      checked={activeChat.onlyAdminsCanMessage || false}
+                      onChange={async (e) => {
+                        const targetVal = e.target.checked;
+                        try {
+                          const chatDocRef = doc(db, "chats", activeChat.id);
+                          await setDoc(chatDocRef, {
+                            onlyAdminsCanMessage: targetVal
+                          }, { merge: true });
+                          setActiveChat(prev => ({ ...prev, onlyAdminsCanMessage: targetVal }));
+                        } catch (err) {
+                          console.error("Toggle restricted chat mode failed:", err);
+                        }
+                      }}
+                      className="w-4 h-4 rounded border-slate-600 bg-slate-950 text-teal-500 focus:ring-teal-500/20 cursor-pointer"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* ABOUT & ACTIVITY SECTION (Replaces old Connection Metadata) */
+              <div className="space-y-2 mb-6 w-full text-left">
+                <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 pl-1">About & Activity</h3>
+                
+                <div className="bg-slate-900/60 border border-slate-800/60 p-4 rounded-2xl flex flex-col gap-4">
+                  
+                  {/* User Bio / About */}
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Bio</p>
+                    <p className="text-sm text-slate-300 font-medium leading-relaxed">
+                      {recipient?.bio || "Hey there! I am using Qwik Messages."}
+                    </p>
+                  </div>
+
+                  {/* Subtle Divider */}
+                  <div className="h-px w-full bg-slate-800/50"></div>
+
+                  {/* Last Active Status */}
+                  <div>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Last Active</p>
+                    <div className="flex items-center gap-2.5">
+                      {recipient?.status === 'ONLINE' || recipient?.isOnline ? (
+                        <>
+                          <span className="relative flex h-2.5 w-2.5 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal-500"></span>
+                          </span>
+                          <span className="text-sm font-bold text-teal-400">Online Now</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="inline-flex rounded-full h-2.5 w-2.5 bg-slate-600 shrink-0"></span>
+                          <span className="text-sm font-medium text-slate-400">
+                            {recipient?.lastActive ? `Last seen ${recipient.lastActive}` : "Last seen recently"}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Privacy and Relationship Controls Section */}
+                  {!activeChat.type || activeChat.type === 'direct' ? (
+                    <>
+                      <div className="h-px w-full bg-slate-800/50"></div>
+                      <div className="flex flex-col gap-3.5 pt-1 text-left">
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Privacy Controls</p>
+                        
+                        {/* Unfriend Button */}
+                        <button 
+                          onClick={async () => {
+                            if (!window.confirm("Remove this conversation from your active chats? This cannot be undone.")) return;
+                            try {
+                              const chatRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+                              if (chatRoomId) {
+                                const chatDocRef = doc(db, "chats", chatRoomId);
+                                // soft remove: remove current user from active participants list
+                                const participantsUpdated = (activeChat.participants || []).filter(p => p !== currentUser.uid);
+                                await setDoc(chatDocRef, {
+                                  participants: participantsUpdated,
+                                  updatedAt: serverTimestamp()
+                                }, { merge: true });
+                                setActiveChat(null);
+                              }
+                            } catch (err) {
+                              console.error("Unfriend failed:", err);
+                            }
+                          }}
+                          className="flex items-center text-xs font-bold text-slate-400 hover:text-red-400 transition-colors gap-2.5 w-full text-left cursor-pointer p-1"
+                        >
+                          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7a4 4 0 11-8 0 4 4 0 018 0zM9 14a6 6 0 00-6 6v1h12v-1a6 6 0 00-6-6zM21 12h-6" />
+                          </svg>
+                          Unfriend this person
+                        </button>
+
+                        {/* Block/Unblock Button */}
+                        <button 
+                          onClick={async () => {
+                            if (!recipient?.uid) return;
+                            try {
+                              const currentUserRef = doc(db, "users", currentUser.uid);
+                              const hasBlocked = currentUserProfile?.blockedUsers?.includes(recipient.uid);
+                              await setDoc(currentUserRef, {
+                                blockedUsers: hasBlocked ? arrayRemove(recipient.uid) : arrayUnion(recipient.uid)
+                              }, { merge: true });
+                              console.log(`Updated block state for ${recipient.uid}: ${!hasBlocked}`);
+                            } catch (err) {
+                              console.error("Block action failed:", err);
+                            }
+                          }}
+                          className="flex items-center text-xs font-black text-rose-500 hover:text-rose-400 transition-colors gap-2.5 w-full text-left cursor-pointer p-1"
+                        >
+                          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                          </svg>
+                          {currentUserProfile?.blockedUsers?.includes(recipient?.uid) ? "Unblock User" : "Block User"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+
+                </div>
+              </div>
+            )}
 
             {/* Danger Zone */}
             <DangerZone isGroup={activeChat.type === 'group'} creatorId={activeChat.creatorId} />
           </div>
         </div>
       )}
-      
-      {activeCall.active && (
-        <JitsiCallRoom 
-          roomName={`qwik-messages-room-${activeChat?.id || activeChat?.chatId || activeChat?.roomId || 'global'}`}
-          userName={currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User'}
-          isVideoCall={activeCall.type === 'video'}
-          onLeave={() => setActiveCall({ active: false, type: null })}
+
+      {isGroupChat && (
+        <UserSearchModal 
+          isOpen={isGroupSearchOpen} 
+          onClose={() => setIsGroupSearchOpen(false)} 
+          targetGroupId={activeChat.id} 
+          existingParticipants={activeChat.participants} 
+        />
+      )}
+
+      {showAddToGroupModal && (
+        <AddToGroupModal 
+          currentUser={currentUser} 
+          targetUser={activeChat} 
+          closeModal={() => setShowAddToGroupModal(false)} 
         />
       )}
     </div>

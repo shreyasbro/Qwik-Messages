@@ -3,40 +3,67 @@ import { userService } from '../../services/userService';
 import { chatService } from '../../services/chatService';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
+import { doc, setDoc, arrayUnion } from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
 
-export default function UserSearchModal({ isOpen, onClose }) {
+export default function UserSearchModal({ isOpen, onClose, targetGroupId = null, existingParticipants = [] }) {
   const { currentUser } = useAuth();
   const { chats, setActiveChat } = useChat();
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedTerm, setDebouncedTerm] = useState('');
   const [systemUsers, setSystemUsers] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
-  // Fetch all users on open
+  // 1. DEBOUNCE EFFECT: Smooths out typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedTerm(searchTerm.trim());
+    }, 400); // 400ms delay
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // 2. MASTER FETCH EFFECT: Strictly restricted dependencies to prevent infinite loops
   useEffect(() => {
     if (!isOpen) return;
+    let isMounted = true;
 
-    const loadUsers = async () => {
-      setLoading(true);
+    const fetchUsers = async () => {
+      if (systemUsers.length === 0 && isMounted) {
+        setIsInitialLoad(true);
+      }
+
       try {
         const users = await userService.getAllUsers();
-        // Filter out current user
-        setSystemUsers(users.filter(u => u.uid !== currentUser?.uid));
-      } catch (err) {
-        console.error("Error loading search users:", err);
-      } finally {
-        setLoading(false);
+        if (isMounted) {
+          // Filter out current user and existing group participants
+          setSystemUsers(users.filter(u => u.uid !== currentUser?.uid && !existingParticipants.includes(u.uid)));
+          setIsInitialLoad(false);
+        }
+      } catch (error) {
+        console.error("Error fetching users:", error);
+        if (isMounted) {
+          setSystemUsers([]);
+          setIsInitialLoad(false);
+        }
       }
     };
 
-    loadUsers();
-  }, [isOpen, currentUser]);
+    if (currentUser?.uid) {
+      fetchUsers();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, currentUser?.uid, existingParticipants]);
 
   if (!isOpen) return null;
 
   // Case-Insensitive Client-Side Search
   const filteredUsers = systemUsers.filter((u) => {
-    const term = searchTerm.toLowerCase().trim();
-    if (!term) return false;
+    const term = debouncedTerm.toLowerCase();
+    if (!term) return true; // Show initial user list if search is empty to match specification
     const name = (u.displayName || u.name || '').toLowerCase();
     const email = (u.email || '').toLowerCase();
     const username = (u.userName || u.username || '').toLowerCase();
@@ -44,6 +71,22 @@ export default function UserSearchModal({ isOpen, onClose }) {
   });
 
   const handleSelectUser = async (targetUser) => {
+    if (targetGroupId) {
+      try {
+        const chatDocRef = doc(db, "chats", targetGroupId);
+        await setDoc(chatDocRef, {
+          participants: arrayUnion(targetUser.uid)
+        }, { merge: true });
+        alert(`${targetUser.displayName || 'User'} has been added to the group!`);
+        onClose();
+        setSearchTerm('');
+      } catch (err) {
+        console.error("Add user to group failed:", err);
+        alert("Failed to add user to group.");
+      }
+      return;
+    }
+
     const targetId = targetUser.uid;
     const existingRoom = chats.find(c => c.participants?.includes(targetId) && c.type !== 'group');
 
@@ -100,12 +143,12 @@ export default function UserSearchModal({ isOpen, onClose }) {
 
         {/* Result List */}
         <div className="max-h-[300px] overflow-y-auto custom-scrollbar flex flex-col gap-2">
-          {loading ? (
-            <p className="text-center text-slate-300 text-xs py-8">Loading system directories...</p>
-          ) : searchTerm && filteredUsers.length === 0 ? (
-            <p className="text-center text-slate-400 text-xs py-8">No results found for "{searchTerm}"</p>
-          ) : !searchTerm ? (
-            <p className="text-center text-slate-400 text-xs py-8">Type a contact name or email above.</p>
+          {isInitialLoad ? (
+            <p className="text-center text-slate-300 text-xs py-8 animate-pulse">Loading system directories...</p>
+          ) : filteredUsers.length === 0 ? (
+            <p className="text-center text-slate-400 text-xs py-8">
+              {debouncedTerm ? `No results found for "${debouncedTerm}"` : "No other users found in directory."}
+            </p>
           ) : (
             filteredUsers.map((u) => {
               const avatarSrc = userService.resolveAvatar(u);
@@ -127,7 +170,9 @@ export default function UserSearchModal({ isOpen, onClose }) {
                     </h4>
                     <p className="text-slate-300 text-xs truncate font-medium">{u.email}</p>
                   </div>
-                  <span className="text-emerald-400 text-sm font-bold">Chat</span>
+                  <span className="text-emerald-400 text-sm font-bold">
+                    {targetGroupId ? "Add" : "Chat"}
+                  </span>
                 </div>
               );
             })

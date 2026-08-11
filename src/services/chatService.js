@@ -178,5 +178,36 @@ export const chatService = {
       lastMessageTime: newLastMessageTime,
       updatedAt: serverTimestamp()
     }, { merge: true });
+  },
+
+  // Leave Group: remove user UID from participants array
+  leaveGroup: async (chatId, userId) => {
+    const { arrayRemove } = await import('firebase/firestore');
+    const roomRef = doc(db, 'chats', chatId);
+    const roomSnap = await getDoc(roomRef);
+    if (roomSnap.exists()) {
+      const currentParticipants = roomSnap.data().participants || [];
+      const updated = currentParticipants.filter(id => id !== userId);
+      await setDoc(roomRef, {
+        participants: updated,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    }
+  },
+
+  // Delete Group Globally: delete subcollection messages and parent doc
+  deleteGroupGlobally: async (chatId) => {
+    // 1. Wipe messages subcollection
+    const messagesRef = collection(db, 'chats', chatId, 'messages');
+    const msgsSnap = await getDocs(messagesRef);
+    const batch = writeBatch(db);
+    msgsSnap.docs.forEach(docSnap => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+
+    // 2. Wipe parent doc
+    const roomRef = doc(db, 'chats', chatId);
+    await deleteDoc(roomRef);
   }
 };
