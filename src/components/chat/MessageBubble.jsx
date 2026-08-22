@@ -22,7 +22,8 @@ export default function MessageBubble({
   onSelectToggle,
   onStartSelectMode,
   isGroup = false,
-  chatId
+  chatId,
+  onShowToast
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -34,6 +35,133 @@ export default function MessageBubble({
   const currentUid = currentUser?.uid || auth?.currentUser?.uid;
   const isOwn = Boolean(currentUid && message?.senderId === currentUid);
   const isMe = isOwn; // Enforce early scope declaration to prevent TDZ ReferenceError
+
+  // Helper: Trigger Toast Popup
+  const triggerToast = (text) => {
+    if (onShowToast) onShowToast(text);
+  };
+
+  // 1. DOWNLOAD MEDIA (IMAGE, VIDEO, AUDIO, DOC)
+  const handleDownloadMedia = async () => {
+    if (!message.mediaUrl) return;
+    setMenuOpen(false);
+    triggerToast('Downloading media...');
+
+    try {
+      const res = await fetch(message.mediaUrl);
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      
+      const fileExt = message.fileExt || (message.type === 'image' ? 'jpg' : message.type === 'video' ? 'mp4' : 'mp3');
+      const fileName = message.fileName || `Qwik_${message.type || 'media'}_${Date.now()}.${fileExt}`;
+
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      triggerToast('Download complete!');
+    } catch (err) {
+      console.error('Download failed:', err);
+      window.open(message.mediaUrl, '_blank');
+      triggerToast('Opening media in new tab');
+    }
+  };
+
+  // 2. COPY MESSAGE / MEDIA LINK
+  const handleCopyMessage = async () => {
+    setMenuOpen(false);
+    try {
+      const contentToCopy = message.text || message.content || message.message || message.mediaUrl || '';
+      if (!contentToCopy) return;
+      await navigator.clipboard.writeText(contentToCopy);
+      triggerToast('Copied to clipboard!');
+    } catch (err) {
+      console.error('Copy failed:', err);
+    }
+  };
+
+  // 3. TOGGLE STAR
+  const handleToggleStar = async () => {
+    setMenuOpen(false);
+    if (!chatId || !message.id || !currentUid) return;
+
+    try {
+      const msgRef = doc(db, 'chats', chatId, 'messages', message.id);
+      const isStarred = message.starredBy?.includes(currentUid);
+
+      await updateDoc(msgRef, {
+        starredBy: isStarred ? arrayRemove(currentUid) : arrayUnion(currentUid),
+      });
+
+      triggerToast(isStarred ? 'Removed from Starred' : 'Message Starred ⭐');
+    } catch (err) {
+      console.error('Star failed:', err);
+    }
+  };
+
+  // 4. PIN MESSAGE TO CHAT HEADER
+  const handlePinMessage = async () => {
+    setMenuOpen(false);
+    if (!chatId || !message.id) return;
+
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      const previewText = message.text || (message.type === 'image' ? '📷 Photo' : message.type === 'document' ? '📄 Document' : message.type === 'poll' ? '📊 Poll' : '📎 Attachment');
+
+      await updateDoc(chatRef, {
+        pinnedMessage: {
+          id: message.id,
+          text: previewText,
+          senderName: message.senderName || message.displayName || 'User',
+        },
+      });
+
+      triggerToast('Message pinned to chat 📌');
+    } catch (err) {
+      console.error('Pin failed:', err);
+    }
+  };
+
+  // 5. REPLY TRIGGER
+  const handleReplyMessage = () => {
+    setMenuOpen(false);
+    if (onReply) onReply(message);
+    triggerToast(`Replying to ${message.senderName || 'message'}`);
+  };
+
+  // 6. EDIT TRIGGER
+  const handleEditMessage = () => {
+    setMenuOpen(false);
+    if (onEdit) onEdit(message);
+  };
+
+  // 7. SELECT TRIGGER
+  const handleSelectMessage = () => {
+    setMenuOpen(false);
+    if (onStartSelectMode) onStartSelectMode(message.id);
+    triggerToast('Multi-select mode enabled');
+  };
+
+  // 8. DELETE FOR ME
+  const handleDeleteForMeAction = async () => {
+    setMenuOpen(false);
+    if (onDeleteForMe) {
+      onDeleteForMe(message.id);
+      triggerToast('Deleted for you');
+    }
+  };
+
+  // 9. DELETE FOR EVERYONE
+  const handleDeleteForEveryoneAction = async () => {
+    setMenuOpen(false);
+    if (onDeleteForEveryone) {
+      onDeleteForEveryone(message.id);
+      triggerToast('Message deleted for everyone');
+    }
+  };
 
   // DOCUMENT VIEW & PERSISTENT DOWNLOAD CACHE LIFECYCLE
   const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'downloaded'
@@ -57,33 +185,34 @@ export default function MessageBubble({
 
     try {
       setDownloadState('downloading');
+      triggerToast('Downloading document...');
+      const response = await fetch(message.mediaUrl);
+      const rawBlob = await response.blob();
 
-      const res = await fetch(message.mediaUrl);
-      if (!res.ok) throw new Error("Network fetch failed");
-      const rawBlob = await res.blob();
-
-      const fileExt = (message.fileExt || message.fileName?.split('.').pop() || '').toLowerCase();
+      // Ensure proper MIME type on the cached blob
       let mimeType = rawBlob.type;
-      if (fileExt === 'pdf') mimeType = 'application/pdf';
-      else if (fileExt === 'txt') mimeType = 'text/plain';
-
+      const fileExt = (message.fileName || '').split('.').pop().toLowerCase();
+      if (!mimeType || mimeType === 'application/octet-stream') {
+        if (fileExt === 'pdf') mimeType = 'application/pdf';
+        else if (fileExt === 'txt') mimeType = 'text/plain';
+      }
       const typedBlob = new Blob([rawBlob], { type: mimeType });
 
-      // Save to Persistent IndexedDB Cache
-      await saveCachedDocument(fileKey, typedBlob, message.fileName, fileExt);
+      // Save binary blob to persistent IndexedDB
+      await saveCachedDocument(fileKey, typedBlob, message.fileName || 'document');
+      setDownloadState('downloaded');
 
-      // Trigger local device download
-      const objectUrl = window.URL.createObjectURL(typedBlob);
+      // Trigger automatic save to device
       const link = document.createElement('a');
-      link.href = objectUrl;
-      link.download = message.fileName || `document.${fileExt || 'pdf'}`;
+      link.href = window.URL.createObjectURL(typedBlob);
+      link.download = message.fileName || 'document';
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-
-      setDownloadState('downloaded');
+      window.URL.revokeObjectURL(link.href);
+      triggerToast('Document saved to device!');
     } catch (err) {
-      console.error("Download failure:", err);
+      console.error('Download and cache failed:', err);
       setDownloadState('idle');
       window.open(message.mediaUrl, '_blank');
     }
@@ -118,9 +247,52 @@ export default function MessageBubble({
     window.open(message.mediaUrl, '_blank');
   };
 
+  // 4. REAL-TIME POLL VOTING HANDLER
+  const handleVote = async (optionId) => {
+    if (!message?.poll || !chatId || !currentUser) return;
+
+    const currentUserId = currentUser.uid;
+    const allowMultiple = message.poll.allowMultiple;
+
+    // Clone options and update voter arrays
+    const updatedOptions = (message.poll.options || []).map((opt) => {
+      const voters = opt.voters || [];
+      const isVotedThis = voters.includes(currentUserId);
+
+      if (opt.id === optionId) {
+        // Toggle vote for selected option
+        const newVoters = isVotedThis
+          ? voters.filter((id) => id !== currentUserId)
+          : [...voters, currentUserId];
+        return { ...opt, voters: newVoters };
+      } else {
+        // If single-vote mode and user voted for a different option, remove them from that option
+        if (!allowMultiple) {
+          return { ...opt, voters: voters.filter((id) => id !== currentUserId) };
+        }
+        return opt;
+      }
+    });
+
+    // Calculate unique total voters
+    const uniqueVoterSet = new Set();
+    updatedOptions.forEach((opt) => (opt.voters || []).forEach((id) => uniqueVoterSet.add(id)));
+
+    try {
+      const messageDocRef = doc(db, 'chats', chatId, 'messages', message.id);
+      await updateDoc(messageDocRef, {
+        'poll.options': updatedOptions,
+        'poll.totalVotes': uniqueVoterSet.size,
+      });
+      triggerToast('Vote recorded!');
+    } catch (err) {
+      console.error('Failed to submit vote:', err);
+    }
+  };
+
   // CRITICAL PRODUCTION SHIELD: Guarantee valid text payload (prevents blank green bricks on Live!)
   const messageText = message?.text || message?.content || message?.message || '';
-  const isMessageEmpty = !messageText.trim() && !message?.imageUrl && !message?.fileUrl;
+  const isMessageEmpty = !messageText.trim() && !message?.imageUrl && !message?.fileUrl && !message?.mediaUrl && message?.type !== 'poll';
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -255,7 +427,9 @@ export default function MessageBubble({
         className={`flex items-end gap-2 w-fit box-border ${
           isMe ? 'flex-row-reverse' : 'flex-row'
         } ${
-          message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+          message.type === 'poll'
+            ? 'w-[300px] sm:w-[360px] md:w-[400px] max-w-full'
+            : message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
             ? 'w-[300px] sm:w-[370px] md:w-[410px] max-w-full'
             : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
             ? 'max-w-[95%]'
@@ -285,7 +459,7 @@ export default function MessageBubble({
         </AnimatePresence>
 
         <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full relative ${
-          message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+          message.type === 'poll' || message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
             ? 'w-full'
             : ''
         }`}>
@@ -375,11 +549,15 @@ export default function MessageBubble({
           {/* Bubble Container - relative context */}
           <div 
             className={`relative rounded-3xl shadow-md text-sm transition-all h-auto min-h-0 flex flex-col box-border shrink-0 break-words [word-break:break-word] ${
-              message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+              message.type === 'poll'
+                ? 'w-full !p-0 bg-transparent border-0 shadow-none'
+                : message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
                 ? 'w-full p-2'
                 : 'px-4 py-2.5 w-fit min-w-[110px]'
             } ${
-              message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
+              message.type === 'poll'
+                ? ''
+                : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
                 ? 'max-w-[95%] bg-transparent border-0 shadow-none !p-0'
                 : isMe 
                   ? 'bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-600 text-slate-950 font-medium rounded-br-none shadow-teal-500/20' 
@@ -410,6 +588,90 @@ export default function MessageBubble({
             <span className="text-[10px] font-black text-teal-400 mb-1.5 block text-left uppercase tracking-wider">
               {message.senderName}
             </span>
+          )}
+
+          {/* TELEGRAM-STYLE POLL CARD RENDERER */}
+          {message.type === 'poll' && message.poll && (
+            <div className="w-full p-4 bg-gray-950/95 rounded-2xl border border-white/10 shadow-2xl select-none text-left">
+              {/* Question & Badge */}
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <h4 className="text-sm font-bold text-white leading-snug break-words">
+                  {message.poll.question}
+                </h4>
+                <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 font-bold text-[10px] shrink-0 border border-teal-500/30">
+                  {message.poll.allowMultiple ? 'Multiple Poll' : 'Poll'}
+                </span>
+              </div>
+
+              {/* Options List */}
+              <div className="space-y-2 mb-3">
+                {(message.poll.options || []).map((option) => {
+                  const isVoted = option.voters?.includes(currentUser?.uid);
+                  const voteCount = option.voters?.length || 0;
+                  const totalVotesCount = message.poll.totalVotes || 0;
+                  const percentage = totalVotesCount > 0 ? Math.round((voteCount / totalVotesCount) * 100) : 0;
+
+                  return (
+                    <div
+                      key={option.id}
+                      onClick={() => handleVote(option.id)}
+                      className={`relative overflow-hidden rounded-xl border p-3 cursor-pointer transition-all duration-200 ${
+                        isVoted
+                          ? 'border-teal-500 bg-teal-950/40 text-white shadow-sm'
+                          : 'border-gray-800/90 bg-gray-900/60 hover:bg-gray-800/80 text-gray-200'
+                      }`}
+                    >
+                      {/* Animated Percentage Fill Bar (Telegram Style) */}
+                      {totalVotesCount > 0 && (
+                        <div
+                          className={`absolute inset-y-0 left-0 transition-all duration-500 ease-out pointer-events-none ${
+                            isVoted ? 'bg-teal-500/25' : 'bg-white/10'
+                          }`}
+                          style={{ width: `${percentage}%` }}
+                        />
+                      )}
+
+                      {/* Option Content */}
+                      <div className="relative z-10 flex items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {/* Radio/Checkbox indicator */}
+                          <div
+                            className={`w-4 h-4 rounded-${
+                              message.poll.allowMultiple ? 'md' : 'full'
+                            } flex items-center justify-center border shrink-0 transition-colors ${
+                              isVoted ? 'bg-teal-500 border-teal-400 text-gray-950' : 'border-gray-600 bg-gray-800'
+                            }`}
+                          >
+                            {isVoted && (
+                              <svg className="w-3 h-3 stroke-[3]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </div>
+                          <span className="font-semibold truncate">{option.text}</span>
+                        </div>
+
+                        {/* Percentage & Vote Count */}
+                        {totalVotesCount > 0 && (
+                          <div className="flex items-center gap-1.5 shrink-0 font-bold">
+                            <span className={isVoted ? 'text-teal-300' : 'text-gray-400'}>{percentage}%</span>
+                            <span className="text-[10px] text-gray-500 font-normal">({voteCount})</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Footer Info */}
+              <div className="flex items-center justify-between text-[11px] text-gray-400 pt-2 border-t border-gray-900">
+                <span>
+                  {message.poll.totalVotes === 1 ? '1 person voted' : `${message.poll.totalVotes || 0} people voted`}
+                </span>
+                <span className="text-gray-500 italic">Tap to vote or change</span>
+              </div>
+            </div>
           )}
 
           {/* TEXT PAYLOAD / CONDITIONAL MEDIA RENDERER */}
@@ -529,6 +791,10 @@ export default function MessageBubble({
             <div className={`flex items-center gap-1 mt-1 text-[10px] leading-none whitespace-nowrap shrink-0 self-end ${
               isMe ? 'text-slate-950 font-bold' : 'text-slate-400'
             }`}>
+              {/* Starred Badge Indicator */}
+              {message.starredBy?.includes(currentUid) && (
+                <span className="text-amber-400 text-xs mr-0.5" title="Starred Message">★</span>
+              )}
               {message.isEdited && <span className="italic mr-1 text-[9px]">(edited)</span>}
               <span className="inline-block whitespace-nowrap">
                 {message.createdAt?.toDate ? message.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now'}
@@ -572,114 +838,124 @@ export default function MessageBubble({
 
                 {/* Action Dropdown Menu Container */}
                 {menuOpen && (
-                  <div className={`absolute top-6 ${isMe ? 'right-0' : 'left-0'} w-40 bg-[#0B111E] border border-slate-700/80 rounded-2xl shadow-2xl z-[9999] py-1.5 flex flex-col text-xs font-semibold text-slate-200 animate-in fade-in zoom-in-95 duration-150 select-none overflow-hidden`}>
-                    {/* Reply */}
+                  <div className={`absolute top-6 ${isMe ? 'right-0' : 'left-0'} w-44 bg-gray-950/95 backdrop-blur-md border border-gray-800/90 rounded-2xl shadow-2xl z-[9999] p-1.5 flex flex-col gap-0.5 text-xs font-semibold text-gray-200 animate-in fade-in zoom-in-95 duration-100 select-none`}>
+                    {/* 1. Reply */}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onReply(message);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
+                      type="button"
+                      onClick={handleReplyMessage}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
                     >
-                      <span>↩️</span> Reply
+                      <svg className="w-4 h-4 text-blue-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                      </svg>
+                      <span>Reply</span>
                     </button>
 
-                    {/* Copy to Clipboard */}
-                    <button
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        try {
-                          await navigator.clipboard.writeText(messageText);
-                          console.log("Message copied to clipboard");
-                        } catch (err) {
-                          console.error("Failed to copy text: ", err);
-                        }
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
-                    >
-                      <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
-                      Copy
-                    </button>
-
-                    {/* Star Message */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        console.log("Toggling Star for message:", message.id);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
-                    >
-                      <svg className="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"></path></svg>
-                      Star
-                    </button>
-
-                    {/* Pin Message */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        console.log("Toggling Pin for message:", message.id);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
-                    >
-                      <svg className="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
-                      Pin
-                    </button>
-
-                    {/* Edit (Own Only) */}
-                    {isMe && (
+                    {/* 2. Download (for images, videos, audio & documents) */}
+                    {Boolean(message.mediaUrl || ['image', 'video', 'audio', 'document'].includes(message.type)) && (
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onEdit(message);
-                          setMenuOpen(false);
-                        }}
-                        className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
+                        type="button"
+                        onClick={handleDownloadMedia}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-teal-300 hover:bg-teal-500/20 hover:text-teal-200 rounded-xl transition-colors cursor-pointer text-left"
                       >
-                        <span>✏️</span> Edit
+                        <svg className="w-4 h-4 text-teal-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>Download</span>
                       </button>
                     )}
 
-                    {/* Select */}
+                    {/* 3. Copy (Text / Media Link) */}
+                    {message.type !== 'poll' && (
+                      <button
+                        type="button"
+                        onClick={handleCopyMessage}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
+                      >
+                        <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        </svg>
+                        <span>Copy</span>
+                      </button>
+                    )}
+
+                    {/* 4. Star / Unstar */}
+                    {message.type !== 'poll' && (
+                      <button
+                        type="button"
+                        onClick={handleToggleStar}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
+                      >
+                        <svg className="w-4 h-4 text-amber-400 shrink-0" fill={message.starredBy?.includes(currentUid) ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+                        </svg>
+                        <span>{message.starredBy?.includes(currentUid) ? 'Unstar' : 'Star'}</span>
+                      </button>
+                    )}
+
+                    {/* 5. Pin */}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onStartSelectMode(message.id);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 hover:bg-slate-800/80 hover:text-white transition-colors flex items-center gap-2 cursor-pointer"
+                      type="button"
+                      onClick={handlePinMessage}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
                     >
-                      <span>☑️</span> Select
+                      <svg className="w-4 h-4 text-teal-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                      <span>Pin</span>
                     </button>
 
-                    <div className="h-px bg-slate-800/80 my-1 mx-2" />
+                    {/* 6. Edit (Own text messages only) */}
+                    {message.type !== 'poll' && isMe && (
+                      <button
+                        type="button"
+                        onClick={handleEditMessage}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
+                      >
+                        <svg className="w-4 h-4 text-orange-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                        </svg>
+                        <span>Edit</span>
+                      </button>
+                    )}
 
-                    {/* Delete for Me */}
+                    {/* 7. Select */}
                     <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDeleteForMe(message.id);
-                        setMenuOpen(false);
-                      }}
-                      className="w-full text-left px-3.5 py-2 text-rose-400 hover:bg-rose-950/30 hover:text-rose-300 transition-colors flex items-center gap-2 cursor-pointer"
+                      type="button"
+                      onClick={handleSelectMessage}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-gray-800/80 hover:text-white rounded-xl transition-colors cursor-pointer text-left"
                     >
-                      <span>🗑️</span> Delete for Me
+                      <svg className="w-4 h-4 text-sky-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Select</span>
                     </button>
 
-                    {/* Delete for Everyone (Own Only) */}
+                    <div className="h-px bg-gray-800/80 my-1 mx-1" />
+
+                    {/* 8. Delete for Me */}
+                    <button
+                      type="button"
+                      onClick={handleDeleteForMeAction}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-rose-300 hover:bg-rose-500/20 rounded-xl transition-colors cursor-pointer text-left"
+                    >
+                      <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                      <span>Delete for Me</span>
+                    </button>
+
+                    {/* 9. Delete for Everyone (Sender only) */}
                     {isMe && (
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteForEveryone(message.id);
-                          setMenuOpen(false);
-                        }}
-                        className="w-full text-left px-3.5 py-2 text-rose-500 hover:bg-rose-950/50 hover:text-rose-400 transition-colors flex items-center gap-2 font-bold cursor-pointer"
+                        type="button"
+                        onClick={handleDeleteForEveryoneAction}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-rose-400 hover:bg-rose-500/20 rounded-xl transition-colors font-bold cursor-pointer text-left"
                       >
-                        <span>💥</span> Delete for All
+                        <svg className="w-4 h-4 text-rose-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        <span>Delete for All</span>
                       </button>
                     )}
                   </div>

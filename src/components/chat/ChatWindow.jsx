@@ -17,6 +17,8 @@ import axios from 'axios';
 import JitsiCallRoom from '../JitsiCallRoom';
 import UserSearchModal from './UserSearchModal';
 import AddToGroupModal from './AddToGroupModal';
+import CreatePollModal from './CreatePollModal';
+import ChatToast from '../ChatToast';
 
 export default function ChatWindow() {
   const { activeChat, setActiveChat, setPreviewImage } = useChat();
@@ -32,6 +34,19 @@ export default function ChatWindow() {
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [toastMessage, setToastMessage] = useState(null);
+  const toastTimeoutRef = useRef(null);
+  const attachMenuRef = useRef(null);
+
+  const showToast = (msg) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToastMessage(msg);
+    toastTimeoutRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 2400);
+  };
   const [activeCall, setActiveCall] = useState({ active: false, type: null }); // type can be 'audio' or 'video'
   const [isGroupSearchOpen, setIsGroupSearchOpen] = useState(false);
   const [showAddToGroupModal, setShowAddToGroupModal] = useState(false);
@@ -589,11 +604,23 @@ export default function ChatWindow() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, activeChat?.id]);
 
+  // Close attachment & emoji menu on outside click
+  useEffect(() => {
+    const handleOutside = (e) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target)) {
+        setShowAttachMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, []);
+
   // Turn off select mode when switching chats
   useEffect(() => {
     setIsSelectMode(false);
     setSelectedMessageIds([]);
     setShowEmojiPicker(false);
+    setShowAttachMenu(false);
     setReplyingTo(null);
     setEditingMessage(null);
     setInputText('');
@@ -739,6 +766,44 @@ export default function ChatWindow() {
           </div>
         </div>
 
+        {/* PINNED MESSAGE BANNER */}
+        {activeChat?.pinnedMessage && (
+          <div className="flex items-center justify-between px-4 py-2 bg-gray-900/90 border-b border-gray-800/80 backdrop-blur-sm z-20 select-none animate-in fade-in duration-150">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-6 h-6 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                </svg>
+              </div>
+              <div className="text-xs truncate">
+                <span className="font-bold text-teal-400 mr-1.5">Pinned:</span>
+                <span className="text-gray-300">{activeChat.pinnedMessage.text}</span>
+              </div>
+            </div>
+
+            {/* Unpin Action */}
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const targetChatId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+                  if (!targetChatId) return;
+                  await updateDoc(doc(db, 'chats', targetChatId), { pinnedMessage: null });
+                  showToast('Message unpinned');
+                } catch (err) {
+                  console.error('Failed to unpin message:', err);
+                }
+              }}
+              className="p-1 text-gray-500 hover:text-rose-400 transition-colors cursor-pointer"
+              title="Unpin message"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
         {/* Floating Select Mode Bar */}
         <AnimatePresence>
           {isSelectMode && (
@@ -874,6 +939,7 @@ export default function ChatWindow() {
                             onStartSelectMode={handleStartSelectMode}
                             isGroup={isGroupChat}
                             chatId={activeChat?.id || activeChat?.chatId || activeChat?.roomId}
+                            onShowToast={showToast}
                           />
                         </div>
                       </React.Fragment>
@@ -998,7 +1064,7 @@ export default function ChatWindow() {
 
             return (
               <div className="flex items-center gap-1.5 w-full px-2 py-2.5 sm:px-4 bg-[#0B111E] border-t border-slate-900/60 box-border">
-                {/* Attachment Clip */}
+                {/* Attachment Menu Popup */}
                 <input 
                   type="file" 
                   ref={fileInputRef} 
@@ -1006,17 +1072,58 @@ export default function ChatWindow() {
                   accept="image/*,.pdf,.doc,.docx,.txt,.mp4,.mp3,.webm" 
                   className="hidden" 
                 />
-                <button 
-                  type="button" 
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploading}
-                  className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
-                    isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
-                  }`}
-                  title="Add Attachment"
-                >
-                  {isUploading ? "⏳" : "📎"}
-                </button>
+                <div className="relative flex items-center flex-shrink-0" ref={attachMenuRef}>
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAttachMenu(!showAttachMenu)}
+                    disabled={isUploading}
+                    className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
+                      isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
+                    }`}
+                    title="Add Attachment"
+                  >
+                    {isUploading ? "⏳" : "📎"}
+                  </button>
+
+                  {/* Attachment Popover */}
+                  {showAttachMenu && (
+                    <div className="absolute bottom-14 left-0 z-50 w-44 bg-gray-950/95 border border-slate-800 rounded-2xl shadow-2xl p-1.5 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 flex flex-col gap-1 select-none">
+                      {/* Document / Media Upload Option */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAttachMenu(false);
+                          fileInputRef.current?.click();
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-slate-800/80 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                        </div>
+                        <span>Upload File</span>
+                      </button>
+
+                      {/* POLL BUTTON IN ATTACHMENT MENU */}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAttachMenu(false);
+                          setShowPollModal(true);
+                        }}
+                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-teal-500/20 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
+                      >
+                        <div className="w-7 h-7 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                          </svg>
+                        </div>
+                        <span>Create Poll</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
                 {/* Emoji Trigger */}
                 <div className="relative flex items-center flex-shrink-0">
@@ -1580,6 +1687,17 @@ export default function ChatWindow() {
           closeModal={() => setShowAddToGroupModal(false)} 
         />
       )}
+
+      {/* In-Chat Poll Creator Modal */}
+      <CreatePollModal
+        isOpen={showPollModal}
+        onClose={() => setShowPollModal(false)}
+        activeChatId={roomId}
+        currentUser={currentUser}
+      />
+
+      {/* Action Feedback Toast */}
+      <ChatToast message={toastMessage} onClose={() => setToastMessage(null)} />
     </div>
   );
 }
