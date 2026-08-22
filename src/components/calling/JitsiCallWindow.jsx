@@ -30,7 +30,7 @@ const JitsiCallWindow = ({ callData, currentUser, onClose }) => {
     const unsub = onSnapshot(doc(db, 'calls', callData.callId), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
-        if (data.status === 'declined' || data.status === 'ended') {
+        if (data.status === 'declined' || data.status === 'rejected' || data.status === 'ended' || data.status === 'missed') {
           console.log(`☎️ Call state transitioned to: ${data.status}. Hanging up...`);
           onClose();
           return;
@@ -139,6 +139,34 @@ const JitsiCallWindow = ({ callData, currentUser, onClose }) => {
     }
   };
 
+  // Outgoing call status messages & state
+  const [outgoingStatus, setOutgoingStatus] = useState('calling'); // 'calling' | 'rejected' | 'busy'
+  const [statusMessage, setStatusMessage] = useState('Calling...');
+
+  // Track status changes in incoming call document to display feedback before closing
+  useEffect(() => {
+    if (isCallAccepted || !callData?.callId) return;
+    const unsub = onSnapshot(doc(db, 'calls', callData.callId), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        if (data.status === 'rejected') {
+          setOutgoingStatus('rejected');
+          setStatusMessage("It looks like your friend is busy / Call Declined");
+          setTimeout(() => {
+            onClose();
+          }, 2500);
+        } else if (data.status === 'missed') {
+          setOutgoingStatus('busy');
+          setStatusMessage("It looks like your friend is busy");
+          setTimeout(() => {
+            onClose();
+          }, 2500);
+        }
+      }
+    });
+    return () => unsub();
+  }, [callData?.callId, isCallAccepted, onClose]);
+
   if (!isCallAccepted) {
     const isHost = currentUser?.uid === callData.hostId;
     const peerAvatar = isHost ? callData.recipientAvatar : callData.hostAvatar;
@@ -149,20 +177,26 @@ const JitsiCallWindow = ({ callData, currentUser, onClose }) => {
         <div className="w-full max-w-sm bg-slate-900/90 border border-slate-700/80 rounded-3xl p-6 shadow-2xl shadow-teal-500/10 flex flex-col items-center justify-center animate-scale-up">
           <div className="relative w-24 h-24 rounded-full overflow-hidden border-4 border-teal-500 mb-4 bg-slate-800 flex items-center justify-center">
             <img src={peerAvatar || defaultAvatarUrl} alt="Calling avatar" className="w-full h-full object-cover" />
-            <div className="absolute inset-0 bg-teal-500/10 animate-pulse" />
+            {outgoingStatus === 'calling' && (
+              <div className="absolute inset-0 bg-teal-500/10 animate-pulse" />
+            )}
           </div>
           <h3 className="text-xl font-bold text-white tracking-wide mb-1 text-center">
             {callData.chatName || (callData.isGroup ? 'Group Call' : 'Personal Call')}
           </h3>
-          <p className="text-xs font-semibold text-teal-400 tracking-widest uppercase animate-pulse mb-6">
-            Calling...
+          <p className={`text-xs font-semibold tracking-widest uppercase mb-6 ${outgoingStatus === 'calling' ? 'text-teal-400 animate-pulse' : 'text-rose-400'}`}>
+            {outgoingStatus === 'calling' ? 'Calling...' : statusMessage}
           </p>
-          <button
-            onClick={onClose}
-            className="w-full py-3 rounded-2xl bg-rose-600/20 border border-rose-500/50 text-rose-400 font-bold text-sm tracking-wider hover:bg-rose-600 hover:text-white transition shadow-lg shadow-rose-600/20"
-          >
-            CANCEL CALL
-          </button>
+          {outgoingStatus === 'calling' ? (
+            <button
+              onClick={onClose}
+              className="w-full py-3 rounded-2xl bg-rose-600/20 border border-rose-500/50 text-rose-400 font-bold text-sm tracking-wider hover:bg-rose-600 hover:text-white transition shadow-lg shadow-rose-600/20 cursor-pointer"
+            >
+              CANCEL CALL
+            </button>
+          ) : (
+            <div className="text-xs text-gray-500">Closing screen...</div>
+          )}
         </div>
         <div className="absolute top-0 left-0 right-0 h-1 bg-teal-500 animate-pulse"></div>
       </div>

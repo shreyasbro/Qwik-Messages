@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { safeString } from '../../utils/safeRender';
 import { motion, AnimatePresence } from 'framer-motion';
-import { auth } from '../../firebaseConfig';
+import { auth, db } from '../../firebaseConfig';
+import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import AudioMessageBubble from './AudioMessageBubble';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
+import { getCachedDocument, saveCachedDocument } from '../../utils/documentStorage';
+
+const SUGGESTED_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
 export default function MessageBubble({ 
   message, 
@@ -16,20 +21,106 @@ export default function MessageBubble({
   isSelected,
   onSelectToggle,
   onStartSelectMode,
-  isGroup = false
+  isGroup = false,
+  chatId
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
+  const [showReactionMenu, setShowReactionMenu] = useState(false);
+  const [showCustomPicker, setShowCustomPicker] = useState(false);
+  const reactionMenuRef = useRef(null);
+  const pickerRef = useRef(null);
   
   const currentUid = currentUser?.uid || auth?.currentUser?.uid;
   const isOwn = Boolean(currentUid && message?.senderId === currentUid);
   const isMe = isOwn; // Enforce early scope declaration to prevent TDZ ReferenceError
 
+  // DOCUMENT VIEW & PERSISTENT DOWNLOAD CACHE LIFECYCLE
+  const [downloadState, setDownloadState] = useState('idle'); // 'idle' | 'downloading' | 'downloaded'
+  const fileKey = message?.id || message?.mediaUrl;
+
+  // 1. CHECK PERSISTENT CACHE ON MOUNT
+  useEffect(() => {
+    if (message?.type === 'document' && fileKey) {
+      getCachedDocument(fileKey).then((cached) => {
+        if (cached && cached.blob) {
+          setDownloadState('downloaded');
+        }
+      });
+    }
+  }, [fileKey, message?.type]);
+
+  // 2. DOWNLOAD AND PERSIST TO INDEXEDDB
+  const handleDownloadFile = async (e) => {
+    if (e) e.stopPropagation();
+    if (downloadState === 'downloading') return;
+
+    try {
+      setDownloadState('downloading');
+
+      const res = await fetch(message.mediaUrl);
+      if (!res.ok) throw new Error("Network fetch failed");
+      const rawBlob = await res.blob();
+
+      const fileExt = (message.fileExt || message.fileName?.split('.').pop() || '').toLowerCase();
+      let mimeType = rawBlob.type;
+      if (fileExt === 'pdf') mimeType = 'application/pdf';
+      else if (fileExt === 'txt') mimeType = 'text/plain';
+
+      const typedBlob = new Blob([rawBlob], { type: mimeType });
+
+      // Save to Persistent IndexedDB Cache
+      await saveCachedDocument(fileKey, typedBlob, message.fileName, fileExt);
+
+      // Trigger local device download
+      const objectUrl = window.URL.createObjectURL(typedBlob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = message.fileName || `document.${fileExt || 'pdf'}`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      setDownloadState('downloaded');
+    } catch (err) {
+      console.error("Download failure:", err);
+      setDownloadState('idle');
+      window.open(message.mediaUrl, '_blank');
+    }
+  };
+
+  // 3. INSTANT OPEN FROM LOCAL CACHE
+  const handleOpenDocument = async (e) => {
+    if (e) e.stopPropagation();
+    const fileExt = (message.fileExt || message.fileName?.split('.').pop() || '').toLowerCase();
+
+    try {
+      const cached = await getCachedDocument(fileKey);
+      if (cached && cached.blob) {
+        // If PDF or Plain text, open locally cached blob directly
+        if (['pdf', 'txt'].includes(fileExt)) {
+          const localUrl = window.URL.createObjectURL(cached.blob);
+          window.open(localUrl, '_blank');
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("Could not retrieve local blob, falling back:", err);
+    }
+
+    // If DOC, DOCX, or Office document, open via Google Docs Viewer
+    if (['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx'].includes(fileExt)) {
+      const viewerUrl = `https://docs.google.com/viewer?url=${encodeURIComponent(message.mediaUrl)}&embedded=false`;
+      window.open(viewerUrl, '_blank');
+      return;
+    }
+
+    window.open(message.mediaUrl, '_blank');
+  };
+
   // CRITICAL PRODUCTION SHIELD: Guarantee valid text payload (prevents blank green bricks on Live!)
   const messageText = message?.text || message?.content || message?.message || '';
-  if (!messageText.trim() && !message?.imageUrl && !message?.fileUrl) {
-    return null; // Don't render empty ghost bubbles if payload is completely missing
-  }
+  const isMessageEmpty = !messageText.trim() && !message?.imageUrl && !message?.fileUrl;
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -37,10 +128,49 @@ export default function MessageBubble({
       if (menuRef.current && !menuRef.current.contains(event.target)) {
         setMenuOpen(false);
       }
+      const clickedOutsideReactionMenu = !reactionMenuRef.current || !reactionMenuRef.current.contains(event.target);
+      const clickedOutsidePicker = !pickerRef.current || !pickerRef.current.contains(event.target);
+      
+      if (clickedOutsideReactionMenu && clickedOutsidePicker) {
+        setShowReactionMenu(false);
+        setShowCustomPicker(false);
+      }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  // Toggle reaction in Firestore
+  const handleToggleReaction = async (emoji) => {
+    if (!chatId || !message.id || !currentUid) return;
+
+    setShowReactionMenu(false);
+    setShowCustomPicker(false);
+
+    const messageRef = doc(db, "chats", chatId, "messages", message.id);
+    const userList = message.reactions?.[emoji] || [];
+    const hasReacted = userList.includes(currentUid);
+
+    try {
+      if (hasReacted) {
+        // Remove reaction
+        await updateDoc(messageRef, {
+          [`reactions.${emoji}`]: arrayRemove(currentUid)
+        });
+      } else {
+        // Add reaction
+        await updateDoc(messageRef, {
+          [`reactions.${emoji}`]: arrayUnion(currentUid)
+        });
+      }
+    } catch (err) {
+      console.error("Failed to toggle reaction:", err);
+    }
+  };
+
+  const activeReactions = Object.entries(message.reactions || {}).filter(
+    ([_, users]) => users && users.length > 0
+  );
 
   const handleBubbleClick = (e) => {
     if (isSelectMode) {
@@ -83,10 +213,10 @@ export default function MessageBubble({
     touchTimer.current = setTimeout(() => {
       isLongPress.current = true;
       if (window.navigator && window.navigator.vibrate) {
-        window.navigator.vibrate(60);
+        window.navigator.vibrate(40);
       }
-      setMenuOpen(true);
-    }, 500);
+      setShowReactionMenu(true);
+    }, 400);
   };
 
   const handleTouchEnd = (e) => {
@@ -100,6 +230,8 @@ export default function MessageBubble({
   const handleTouchMove = () => {
     if (touchTimer.current) clearTimeout(touchTimer.current);
   };
+
+  if (isMessageEmpty) return null;
 
   return (
     <motion.div 
@@ -123,7 +255,9 @@ export default function MessageBubble({
         className={`flex items-end gap-2 w-fit box-border ${
           isMe ? 'flex-row-reverse' : 'flex-row'
         } ${
-          message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
+          message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+            ? 'w-[300px] sm:w-[370px] md:w-[410px] max-w-full'
+            : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
             ? 'max-w-[95%]'
             : 'max-w-[75%] md:max-w-[65%]'
         }`}
@@ -150,24 +284,116 @@ export default function MessageBubble({
           )}
         </AnimatePresence>
 
-        {/* Bubble Container - relative context */}
-        <div 
-          className={`relative px-4 py-2.5 rounded-3xl shadow-md text-sm transition-all h-auto min-h-0 w-fit min-w-[110px] flex flex-col box-border shrink-0 break-words [word-break:break-word] ${
-            message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
-              ? 'max-w-[95%] bg-transparent border-0 shadow-none !p-0'
-              : isMe 
-                ? 'bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-600 text-slate-950 font-medium rounded-br-none shadow-teal-500/20 max-w-[85%] sm:max-w-[75%] md:max-w-[65%]' 
-                : 'bg-slate-900/90 text-slate-100 border border-slate-800/80 rounded-bl-none max-w-[85%] sm:max-w-[75%] md:max-w-[65%]'
-          }`}
-          style={{
-            WebkitTouchCallout: 'none',
-            WebkitUserSelect: 'none',
-            KhtmlUserSelect: 'none',
-            MozUserSelect: 'none',
-            msUserSelect: 'none',
-            userSelect: 'none'
-          }}
-        >
+        <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full relative ${
+          message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+            ? 'w-full'
+            : ''
+        }`}>
+          
+          {/* FLOATING ACTION TRIGGER (ON HOVER) */}
+          {!isSelectMode && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowReactionMenu(!showReactionMenu);
+              }}
+              className={`absolute top-1/2 -translate-y-1/2 ${
+                isMe ? '-left-8' : '-right-8'
+              } opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 shadow-md z-30 cursor-pointer`}
+              title="React"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+          )}
+
+          {/* FLOATING REACTION POPUP BAR */}
+          {showReactionMenu && (
+            <div 
+              ref={reactionMenuRef}
+              className={`absolute -top-12 ${isMe ? 'right-0' : 'left-0'} z-50 flex items-center gap-1 bg-slate-900/95 backdrop-blur-md border border-slate-700/80 px-2 py-1.5 rounded-full shadow-2xl animate-in fade-in zoom-in-95 duration-150`}
+            >
+              {/* Quick Suggested Emojis */}
+              {SUGGESTED_EMOJIS.map((emoji) => {
+                const hasReacted = message.reactions?.[emoji]?.includes(currentUid);
+                return (
+                  <button
+                    key={emoji}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleReaction(emoji);
+                    }}
+                    className={`w-8 h-8 flex items-center justify-center text-lg hover:scale-125 transition-transform rounded-full cursor-pointer ${
+                      hasReacted ? 'bg-teal-500/20 ring-1 ring-teal-400' : 'hover:bg-white/10'
+                    }`}
+                  >
+                    {emoji}
+                  </button>
+                );
+              })}
+
+              {/* Custom Emoji (+) Button */}
+              <div className="relative border-l border-slate-700 pl-1 ml-0.5">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowCustomPicker(!showCustomPicker);
+                  }}
+                  className="w-7 h-7 flex items-center justify-center rounded-full bg-slate-800 hover:bg-slate-700 text-teal-400 hover:text-white transition-colors text-sm font-bold cursor-pointer"
+                  title="More Emojis"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* FULL EMOJI PICKER MODAL (AUTO-POSITIONED - DETACHED FROM PILL LAYOUT) */}
+          {showCustomPicker && (
+            <div 
+              ref={pickerRef}
+              className={`fixed inset-x-4 top-1/2 -translate-y-1/2 sm:static sm:translate-y-0 sm:inset-auto sm:absolute sm:bottom-12 ${
+                isMe ? 'sm:right-0' : 'sm:left-0'
+              } z-[80] shadow-2xl flex justify-center`}
+            >
+              <div className="overflow-hidden rounded-2xl border border-slate-700 shadow-2xl scale-90 sm:scale-100 origin-bottom">
+                <EmojiPicker 
+                  lazyLoadEmojis={true} 
+                  onEmojiClick={(emojiData) => handleToggleReaction(emojiData.emoji)}
+                  searchPlaceHolder="Search reaction emoji..." 
+                  theme={Theme.DARK}
+                  width={320}
+                  height={400}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Bubble Container - relative context */}
+          <div 
+            className={`relative rounded-3xl shadow-md text-sm transition-all h-auto min-h-0 flex flex-col box-border shrink-0 break-words [word-break:break-word] ${
+              message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+                ? 'w-full p-2'
+                : 'px-4 py-2.5 w-fit min-w-[110px]'
+            } ${
+              message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
+                ? 'max-w-[95%] bg-transparent border-0 shadow-none !p-0'
+                : isMe 
+                  ? 'bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-600 text-slate-950 font-medium rounded-br-none shadow-teal-500/20' 
+                  : 'bg-slate-900/90 text-slate-100 border border-slate-800/80 rounded-bl-none'
+            }`}
+            style={{
+              WebkitTouchCallout: 'none',
+              WebkitUserSelect: 'none',
+              KhtmlUserSelect: 'none',
+              MozUserSelect: 'none',
+              msUserSelect: 'none',
+              userSelect: 'none'
+            }}
+          >
 
           {/* Quoted Reply Banner */}
           {message.replyTo && (
@@ -188,8 +414,81 @@ export default function MessageBubble({
 
           {/* TEXT PAYLOAD / CONDITIONAL MEDIA RENDERER */}
           {message.messageType === "media" && message.mediaUrl ? (
-            <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-950/40 border border-black/10">
-              {message.mediaUrl.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl.includes("/audio/") || message.text?.endsWith(".mp3") ? (
+            <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-950/40 border border-black/10 w-full">
+              {message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt) ? (
+                <div className="w-full flex items-center justify-between gap-3 p-3 bg-gray-950/85 hover:bg-gray-950 rounded-xl border border-white/10 shadow-lg select-none">
+                  
+                  {/* Extension Type Badge */}
+                  <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 font-bold uppercase text-[10px] text-white shadow-md ${
+                    message.fileExt === 'pdf' 
+                      ? 'bg-gradient-to-br from-rose-500 to-rose-700' 
+                      : ['doc', 'docx'].includes(message.fileExt)
+                      ? 'bg-gradient-to-br from-blue-500 to-blue-700'
+                      : 'bg-gradient-to-br from-teal-500 to-emerald-700'
+                  }`}>
+                    <svg className="w-5 h-5 mb-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span>{message.fileExt || 'DOC'}</span>
+                  </div>
+
+                  {/* File Details (Stretched and Non-Wrapping) */}
+                  <div className="flex-1 min-w-0 pr-1 text-left">
+                    <div 
+                      className="text-xs font-semibold text-white truncate max-w-[150px] sm:max-w-[200px] md:max-w-[230px]" 
+                      title={message.fileName || "Document"}
+                    >
+                      {message.fileName || "Document File"}
+                    </div>
+                    <div className="text-[11px] text-gray-400 mt-1 flex items-center gap-1.5 whitespace-nowrap">
+                      <span>{message.fileSize || "File"}</span>
+                      <span>•</span>
+                      <span className={`capitalize font-medium ${
+                        downloadState === 'downloaded' ? 'text-teal-400 font-semibold' : 'text-gray-400'
+                      }`}>
+                        {downloadState === 'downloaded' ? 'Downloaded' : message.fileExt || 'File'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Download / Open Action Button */}
+                  <div className="shrink-0">
+                    {downloadState === 'downloaded' ? (
+                      <button
+                        type="button"
+                        onClick={handleOpenDocument}
+                        className="px-3 py-2 rounded-xl bg-teal-500 hover:bg-teal-400 text-gray-950 font-bold text-xs flex items-center gap-1.5 shadow-md transition-all active:scale-95 cursor-pointer"
+                        title="Open Document"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                        <span>OPEN</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={downloadState === 'downloading'}
+                        onClick={handleDownloadFile}
+                        className="p-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-95 cursor-pointer"
+                        title="Download Document"
+                      >
+                        {downloadState === 'downloading' ? (
+                          <svg className="animate-spin w-4 h-4 text-teal-400" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                </div>
+              ) : message.mediaUrl.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl.includes("/audio/") || message.text?.endsWith(".mp3") ? (
                 <AudioMessageBubble 
                   message={message}
                   isMe={isMe}
@@ -387,6 +686,34 @@ export default function MessageBubble({
                 )}
               </div>
             )}
+          </div>
+
+          {/* ATTACHED REACTION BADGES (BOTTOM PILLS) */}
+          {activeReactions.length > 0 && (
+            <div className={`flex flex-wrap gap-1 mt-1 ${isMe ? 'justify-end' : 'justify-start'}`}>
+              {activeReactions.map(([emoji, users]) => {
+                const hasReacted = users.includes(currentUid);
+                return (
+                  <button
+                    key={emoji}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleReaction(emoji);
+                    }}
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                      hasReacted
+                        ? 'bg-teal-500/15 border-teal-500/50 text-teal-300 ring-1 ring-teal-500/30'
+                        : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                    title={users.length > 1 ? `${users.length} reactions` : '1 reaction'}
+                  >
+                    <span>{emoji}</span>
+                    {users.length > 1 && <span>{users.length}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </motion.div>

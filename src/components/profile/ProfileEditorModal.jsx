@@ -5,12 +5,14 @@ import { auth, db } from '../../firebaseConfig';
 import { isUsernameAvailable } from '../../utils/usernameUtils';
 import { userService } from '../../services/userService';
 import PhotoEditorModal from './PhotoEditorModal';
+import PresenceBadge, { PRESENCE_OPTIONS } from './PresenceBadge';
 
 export default function ProfileEditorModal({ isOpen, onClose, currentUser, userProfile }) {
   const [displayName, setDisplayName] = useState(userProfile?.displayName || currentUser?.displayName || '');
   const [username, setUsername] = useState(userProfile?.username || '');
   const [photoURL, setPhotoURL] = useState(userProfile?.photoURL || currentUser?.photoURL || '');
   const [bio, setBio] = useState(userProfile?.bio || "Hey there! I am using Qwik Messages.");
+  const [presenceStatus, setPresenceStatus] = useState(userProfile?.presenceStatus || 'online');
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingImageSrc, setEditingImageSrc] = useState(null);
@@ -27,6 +29,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       setUsername(userProfile.username || '');
       setPhotoURL(userProfile.photoURL || currentUser?.photoURL || '');
       setBio(userProfile.bio || "Hey there! I am using Qwik Messages.");
+      setPresenceStatus(userProfile.presenceStatus || 'online');
     }
   }, [userProfile, currentUser]);
 
@@ -123,13 +126,14 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       // 3. File URL
       let finalPhotoUrl = photoURL;
 
-      // 4. CRITICAL ATOMIC WRITE: Strictly save username and bio to Firestore!
+      // 4. CRITICAL ATOMIC WRITE: Strictly save username, bio, and presenceStatus to Firestore!
       const userDocRef = doc(db, 'users', currentUser.uid);
       await setDoc(userDocRef, {
         displayName: displayName.trim(),
         username: formattedUsername, // Absolutely enforce this payload!
         photoURL: finalPhotoUrl,
         bio: bio.trim(),
+        presenceStatus,
         updatedAt: serverTimestamp()
       }, { merge: true });
 
@@ -173,32 +177,78 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       </header>
 
       {/* Main Content Area: Flex-1 and scrollable */}
-      <main className="flex-1 w-full overflow-y-auto p-4 md:p-6 custom-scrollbar max-w-lg mx-auto">
+      <main className="flex-1 w-full overflow-y-auto p-4 md:p-6 custom-scrollbar max-w-md md:max-w-2xl lg:max-w-3xl mx-auto">
         <form onSubmit={handleSubmit} className="space-y-5">
-          {/* Avatar Upload Area */}
-          <div className="flex flex-col items-center gap-2">
-            <div 
-              onClick={handlePhotoClick}
-              className="relative w-24 h-24 rounded-full overflow-hidden border-2 border-slate-800 hover:border-emerald-500 transition-colors cursor-pointer group"
-            >
-              <img 
-                src={photoURL || userService.resolveAvatar(userProfile || currentUser)} 
-                alt="Profile Preview" 
-                className="w-full h-full object-cover"
+          {/* TOP SECTION: STACKED ON MOBILE, 2-COLUMN ON DESKTOP */}
+          <div className="flex flex-col md:flex-row items-center md:items-start justify-between gap-6 p-4 rounded-2xl bg-slate-900/40 border border-slate-800/80 mb-6">
+            
+            {/* LEFT COLUMN: AVATAR WITH BADGE */}
+            <div className="flex flex-col items-center justify-center shrink-0">
+              <div className="relative group">
+                <div 
+                  onClick={handlePhotoClick}
+                  className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-full overflow-hidden border-2 border-slate-800 hover:border-emerald-500 transition-colors cursor-pointer group animate-fade-in"
+                >
+                  <img
+                    src={photoURL || userService.resolveAvatar(userProfile || currentUser)}
+                    alt="Profile Preview"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] font-black uppercase tracking-wider">
+                    <span>📸</span>
+                    <span>Change</span>
+                  </div>
+                </div>
+                {/* Presence Badge Overlay on Avatar */}
+                <PresenceBadge className="absolute bottom-1 right-1 z-10" status={presenceStatus}/>
+              </div>
+              <input 
+                ref={fileInputRef}
+                type="file" 
+                accept="image/*" 
+                onChange={handleFileChange}
+                className="hidden"
               />
-              <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] font-black uppercase tracking-wider">
-                <span>📸</span>
-                <span>Change Photo</span>
+              {uploading && <span className="text-[10px] text-slate-400 font-bold mt-1">Uploading preview...</span>}
+              <span className="text-[11px] text-slate-400 mt-2 font-medium">Profile Photo</span>
+            </div>
+
+            {/* RIGHT COLUMN: SET PRESENCE STATUS SELECTOR */}
+            <div className="flex-1 w-full text-left">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-300 mb-2.5 text-center md:text-left">
+                Set Presence Status
+              </label>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 md:gap-2.5">
+                {PRESENCE_OPTIONS.map((opt) => {
+                  const isSelected = presenceStatus === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setPresenceStatus(opt.id)}
+                      className={`flex items-start gap-2.5 md:gap-3 p-2.5 md:p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-teal-500/15 border-teal-500 ring-1 ring-teal-500/50 shadow-sm'
+                          : 'bg-slate-900/80 border-slate-800 hover:border-slate-700 hover:bg-slate-800/60'
+                      }`}
+                    >
+                      <div className="mt-0.5 shrink-0">{opt.renderIcon('w-3.5 h-3.5 md:w-4 md:h-4')}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className={`text-xs font-semibold ${isSelected ? 'text-teal-300' : 'text-slate-200'}`}>
+                          {opt.label}
+                        </div>
+                        {/* Full description on PC; compact on mobile */}
+                        <div className="text-[10px] md:text-[11px] leading-tight text-slate-400 mt-0.5 whitespace-normal">
+                          {opt.description}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
-            <input 
-              ref={fileInputRef}
-              type="file" 
-              accept="image/*" 
-              onChange={handleFileChange}
-              className="hidden"
-            />
-            {uploading && <span className="text-[10px] text-slate-400 font-bold">Uploading preview...</span>}
+
           </div>
 
           {/* Form Fields */}

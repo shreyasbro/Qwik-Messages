@@ -126,7 +126,8 @@ export function useCallManager(currentUser) {
     try {
       const callRef = doc(db, 'calls', callId);
       await updateDoc(callRef, {
-        status: 'declined',
+        status: 'rejected',
+        endReason: 'declined_by_receiver',
         endedBy: currentUser?.uid || '',
         rejectedUsers: arrayUnion(currentUser?.uid || ''),
         updatedAt: serverTimestamp()

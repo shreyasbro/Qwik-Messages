@@ -8,6 +8,7 @@ import { useCall } from '../../context/CallContext';
 import { useRecipient } from '../../hooks/useRecipient';
 import { safeString } from '../../utils/safeRender';
 import MessageBubble from './MessageBubble';
+import PresenceBadge from '../profile/PresenceBadge';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { auth, db } from '../../firebaseConfig';
@@ -39,20 +40,90 @@ export default function ChatWindow() {
   const [isEditingName, setIsEditingName] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const messagesEndRef = useRef(null);
+  const scrollContainerRef = useRef(null);
+
+  // Touch engine internal state refs
+  const touchState = useRef({
+    startY: 0,
+    lastY: 0,
+    startTime: 0,
+    velocity: 0,
+    isDragging: false,
+    animFrame: null
+  });
   
   // Media upload features states
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef(null);
-  const abortControllerRef = useRef(null);
+  const uploadXhrRef = useRef(null);
 
   const cancelUpload = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsUploading(false);
-      setUploadProgress(0);
-      console.log("Upload manually canceled by user.");
+    if (uploadXhrRef.current) {
+      uploadXhrRef.current.abort();
+      uploadXhrRef.current = null;
     }
+    setIsUploading(false);
+    setUploadProgress(0);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    console.log("Upload manually canceled by user.");
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  };
+
+  const uploadMediaDirect = (file, onProgress) => {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      uploadXhrRef.current = xhr; // Store active XHR reference
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('upload_preset', 'Media Sending');
+
+      xhr.open('POST', 'https://api.cloudinary.com/v1_1/dphkrk4sf/auto/upload', true);
+
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            onProgress(percent);
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        uploadXhrRef.current = null;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            resolve(res);
+          } catch (err) {
+            reject(new Error('Invalid Cloudinary response format'));
+          }
+        } else {
+          console.error('Cloudinary upload error payload:', xhr.responseText);
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      };
+
+      xhr.onabort = () => {
+        uploadXhrRef.current = null;
+        reject(new Error('UPLOAD_ABORTED'));
+      };
+
+      xhr.onerror = () => {
+        uploadXhrRef.current = null;
+        reject(new Error('Network error during media upload'));
+      };
+
+      xhr.send(formData);
+    });
   };
 
   const handleFileChange = async (e) => {
@@ -66,68 +137,36 @@ export default function ChatWindow() {
       return;
     }
 
-    const ALLOWED_TYPES = ["video/mp4", "audio/mp3", "audio/mpeg", "image/png", "image/jpeg", "image/jpg", "video/webm"];
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    const fileExt = file.name.split('.').pop().toLowerCase();
+    const allowedExtensions = ["mp4", "mp3", "mpeg", "png", "jpg", "jpeg", "webm", "pdf", "doc", "docx", "txt"];
+    if (!allowedExtensions.includes(fileExt)) {
       alert("Unsupported file format!");
       return;
     }
-
-    const formData = new FormData();
-    formData.append("file", file);
 
     setIsUploading(true);
     setUploadProgress(0);
 
     try {
-      abortControllerRef.current = new AbortController();
-
-      // ⚡ Base Vercel URL mapping config to support local device wrappers (Capacitor)
-      const API_BASE_URL = "https://qwik-messages.vercel.app";
-      const signRes = await axios.get(`${API_BASE_URL}/api/get-upload-signature`, {
-        signal: abortControllerRef.current.signal
+      const cloudData = await uploadMediaDirect(file, (progress) => {
+        setUploadProgress(progress);
       });
 
-      if (!signRes.data.success) {
-        throw new Error(signRes.data.error || "Backend returned success: false");
-      }
-      
-      const { signature, timestamp, cloudName, apiKey, folder } = signRes.data;
-
-      // 2. Wrap multi-part data stream packet
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("api_key", apiKey);
-      formData.append("timestamp", timestamp);
-      formData.append("signature", signature);
-      formData.append("folder", folder);
-
-      // 3. Dispatch asset data directly to Cloudinary core CDN endpoints
-      const resourceType = file.type.startsWith("video/") ? "video" : "auto";
-      const uploadRes = await axios.post(
-        `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`,
-        formData,
-        {
-          headers: { 'Content-Type': 'multipart/form-data' },
-          signal: abortControllerRef.current.signal, // ⚡ Attach Abort Signal
-          onUploadProgress: (progressEvent) => {
-            if (progressEvent.total) {
-              const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-              setUploadProgress(percent);
-              console.log(`✨ Upload progress mapping: ${percent}%`);
-            }
-          }
-        }
-      );
-
-      const cloudData = uploadRes.data;
-
-      // 4. Record successful payload secure link to Firestore chat history collection
       if (cloudData.secure_url) {
+        const isImage = file.type.startsWith('image/');
+        const isVideo = file.type.startsWith('video/');
+        const isAudio = file.type.startsWith('audio/');
+        const isDocument = ['pdf', 'doc', 'docx', 'txt'].includes(fileExt);
+
         const messagesRef = collection(db, 'chats', roomId, 'messages');
         await addDoc(messagesRef, {
           senderId: senderId,
           text: `📎 Sent a file: ${file.name}`,
           messageType: "media", // STRICTLY REQUIRED FOR CRON
+          type: isDocument ? "document" : (isImage ? "image" : (isVideo ? "video" : "audio")),
+          fileName: file.name,
+          fileSize: formatFileSize(file.size),
+          fileExt: fileExt,
           mediaUrl: cloudData.secure_url,
           storageProvider: "cloudinary",
           mediaStoragePath: cloudData.public_id,
@@ -152,33 +191,24 @@ export default function ChatWindow() {
       } else {
         alert("Asset target validation failed at Cloudinary edge nodes.");
       }
-    } catch (error) {
-      if (axios.isCancel(error)) {
-        console.log("Upload manually canceled by user.");
+    } catch (err) {
+      if (err.message === 'UPLOAD_ABORTED') {
+        console.log('User cancelled the upload.');
         return;
       }
-      console.error("🚨 UPLOAD ERROR:", error);
-      
-      // Extract the actual error message safely
-      let errorMsg = error.message;
-      if (error.response && error.response.data) {
-        errorMsg = typeof error.response.data === 'object' 
-          ? JSON.stringify(error.response.data) 
-          : error.response.data;
-      }
-      
-      alert(`Upload Failed: ${errorMsg}`);
+      console.error("Direct upload error:", err);
+      alert("Upload Failed: " + (err.message || "Please check network connection"));
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
-      abortControllerRef.current = null;
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
   // 1. CHRONOLOGICAL FETCHING PIPELINE
+  const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+
   useEffect(() => {
-    const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
     if (!roomId) {
       setMessages([]);
       return;
@@ -222,7 +252,7 @@ export default function ChatWindow() {
       if (timeoutId) clearTimeout(timeoutId);
       unsubscribe();
     };
-  }, [activeChat]);
+  }, [roomId]);
 
   useEffect(() => {
     setNewGroupDesc(activeChat?.groupDescription || '');
@@ -495,6 +525,65 @@ export default function ChatWindow() {
     }
   };
 
+  // 🔥 DIRECT HARDWARE TOUCH-SCROLL ENGINE
+  const handleTouchStart = (e) => {
+    const el = scrollContainerRef.current;
+    if (!el || e.touches.length !== 1) return;
+
+    if (touchState.current.animFrame) {
+      cancelAnimationFrame(touchState.current.animFrame);
+    }
+
+    const touch = e.touches[0];
+    touchState.current = {
+      startY: touch.clientY,
+      lastY: touch.clientY,
+      startTime: Date.now(),
+      velocity: 0,
+      isDragging: true,
+      animFrame: null
+    };
+  };
+
+  const handleTouchMove = (e) => {
+    const el = scrollContainerRef.current;
+    if (!el || !touchState.current.isDragging || e.touches.length !== 1) return;
+
+    const touch = e.touches[0];
+    const currentY = touch.clientY;
+    const deltaY = touchState.current.lastY - currentY;
+    const now = Date.now();
+    const timeDelta = now - touchState.current.startTime || 1;
+
+    // Direct mathematical scroll manipulation
+    el.scrollTop += deltaY;
+
+    // Track instant velocity for inertia release
+    touchState.current.velocity = deltaY / timeDelta;
+    touchState.current.lastY = currentY;
+    touchState.current.startTime = now;
+  };
+
+  const handleTouchEnd = () => {
+    const el = scrollContainerRef.current;
+    if (!el || !touchState.current.isDragging) return;
+
+    touchState.current.isDragging = false;
+    let velocity = touchState.current.velocity * 18; // Inertia boost
+
+    // Kinetic Decay Animation (Inertia Momentum)
+    const decay = () => {
+      if (Math.abs(velocity) < 0.1) return;
+      el.scrollTop += velocity;
+      velocity *= 0.92; // Friction factor
+      touchState.current.animFrame = requestAnimationFrame(decay);
+    };
+
+    if (Math.abs(velocity) > 0.5) {
+      touchState.current.animFrame = requestAnimationFrame(decay);
+    }
+  };
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -508,7 +597,7 @@ export default function ChatWindow() {
     setReplyingTo(null);
     setEditingMessage(null);
     setInputText('');
-  }, [activeChat]);
+  }, [roomId]);
 
   if (!activeChat) {
     return (
@@ -574,7 +663,7 @@ export default function ChatWindow() {
               ←
             </button>
             
-            <div className="relative">
+            <div className="relative w-10 h-10 shrink-0">
               <img 
                 src={avatarSrc} 
                 alt={safeString(recipientName)} 
@@ -583,8 +672,11 @@ export default function ChatWindow() {
                   e.stopPropagation();
                   setPreviewImage(avatarSrc);
                 }}
-                className="w-10 h-10 rounded-full object-cover border border-slate-800 group-hover:border-teal-500 transition-colors cursor-pointer hover:scale-105 transition-transform" 
+                className="w-full h-full rounded-full object-cover border border-slate-800 group-hover:border-teal-500 transition-colors cursor-pointer hover:scale-105 transition-transform" 
               />
+              {!isGroupChat && (
+                <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
+              )}
             </div>
 
             <div className="min-w-0 text-left">
@@ -696,98 +788,110 @@ export default function ChatWindow() {
           )}
         </AnimatePresence>
 
-        {/* Message Bubble Logs List */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar px-3 sm:px-5 py-4 space-y-3 relative bg-slate-950/40 flex flex-col">
-          <AnimatePresence initial={false}>
-            {loading && safeMessages.length === 0 ? (
-              /* 🟢 IF LOADING AND NO MESSAGES YET: SHOW SKELETON */
-              <div className="flex-1 overflow-hidden p-6 space-y-6 animate-fade-in select-none">
-                {[...Array(6)].map((_, index) => {
-                  const isSender = index % 2 === 0;
-                  return (
-                    <div key={index} className={`flex ${isSender ? "justify-end" : "justify-start"}`}>
-                      <div className="flex items-end gap-2.5 max-w-[75%]">
-                        <div className="flex flex-col gap-1.5">
-                          <div 
-                            className={`p-3.5 rounded-2xl border ${isSender ? "bg-teal-500/10 border-teal-500/50 rounded-br-sm" : "bg-slate-800/80 border-slate-700/60 rounded-tl-sm"}`}
-                          >
-                            <div className={`h-2.5 rounded-full ${isSender ? "bg-teal-400/70" : "bg-slate-600"} ${index % 3 === 0 ? "w-24" : "w-40"} animate-pulse mb-2`}></div>
-                            <div className={`h-2.5 rounded-full ${isSender ? "bg-teal-400/50" : "bg-slate-700"} w-48 animate-pulse`}></div>
+        {/* 2. DEDICATED SCROLLABLE MESSAGES VIEWPORT */}
+        <main className="flex-1 min-h-0 relative w-full overflow-hidden">
+          <div 
+            ref={scrollContainerRef}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            className="chat-scroll-engine px-3 sm:px-5 py-4 space-y-3 relative bg-slate-950/40 flex flex-col h-full" 
+            id="chat-messages-container"
+          >
+            <AnimatePresence initial={false}>
+              {loading && safeMessages.length === 0 ? (
+                /* 🟢 IF LOADING AND NO MESSAGES YET: SHOW SKELETON */
+                <div className="flex-1 overflow-hidden p-6 space-y-6 animate-fade-in select-none">
+                  {[...Array(6)].map((_, index) => {
+                    const isSender = index % 2 === 0;
+                    return (
+                      <div key={index} className={`flex ${isSender ? "justify-end" : "justify-start"}`}>
+                        <div className="flex items-end gap-2.5 max-w-[75%]">
+                          <div className="flex flex-col gap-1.5">
+                            <div 
+                              className={`p-3.5 rounded-2xl border ${isSender ? "bg-teal-500/10 border-teal-500/50 rounded-br-sm" : "bg-slate-800/80 border-slate-700/60 rounded-tl-sm"}`}
+                            >
+                              <div className={`h-2.5 rounded-full ${isSender ? "bg-teal-400/70" : "bg-slate-600"} ${index % 3 === 0 ? "w-24" : "w-40"} animate-pulse mb-2`}></div>
+                              <div className={`h-2.5 rounded-full ${isSender ? "bg-teal-400/50" : "bg-slate-700"} w-48 animate-pulse`}></div>
+                            </div>
+                            <div className={`h-2 w-10 bg-slate-800 rounded-full animate-pulse ${isSender ? "self-end" : "self-start"}`}></div>
                           </div>
-                          <div className={`h-2 w-10 bg-slate-800 rounded-full animate-pulse ${isSender ? "self-end" : "self-start"}`}></div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : safeMessages.length > 0 ? (
-              /* 🔵 SHOW MESSAGES */
-              (() => {
-                const getWhatsAppDateLabel = (timestampMillis) => {
-                  const validMillis = timestampMillis || Date.now();
-                  const msgDate = new Date(validMillis);
-                  const today = new Date();
-                  const yesterday = new Date(today);
-                  yesterday.setDate(yesterday.getDate() - 1);
+                    );
+                  })}
+                </div>
+              ) : safeMessages.length > 0 ? (
+                /* 🔵 SHOW MESSAGES */
+                (() => {
+                  const getWhatsAppDateLabel = (timestampMillis) => {
+                    const validMillis = timestampMillis || Date.now();
+                    const msgDate = new Date(validMillis);
+                    const today = new Date();
+                    const yesterday = new Date(today);
+                    yesterday.setDate(yesterday.getDate() - 1);
 
-                  if (msgDate.toDateString() === today.toDateString()) {
-                    return 'Today';
-                  }
-                  if (msgDate.toDateString() === yesterday.toDateString()) {
-                    return 'Yesterday';
-                  }
-                  
-                  return msgDate.toLocaleDateString('en-GB', { 
-                    day: 'numeric', 
-                    month: 'long', 
-                    year: 'numeric' 
-                  });
-                };
+                    if (msgDate.toDateString() === today.toDateString()) {
+                      return 'Today';
+                    }
+                    if (msgDate.toDateString() === yesterday.toDateString()) {
+                      return 'Yesterday';
+                    }
+                    
+                    return msgDate.toLocaleDateString('en-GB', { 
+                      day: 'numeric', 
+                      month: 'long', 
+                      year: 'numeric' 
+                    });
+                  };
 
-                return safeMessages.map((m, index) => {
-                  const currentLabel = getWhatsAppDateLabel(m.timestampMillis);
-                  const prevLabel = index > 0 ? getWhatsAppDateLabel(safeMessages[index - 1].timestampMillis) : null;
-                  const showDateHeader = currentLabel !== prevLabel;
+                  return safeMessages.map((m, index) => {
+                    const currentLabel = getWhatsAppDateLabel(m.timestampMillis);
+                    const prevLabel = index > 0 ? getWhatsAppDateLabel(safeMessages[index - 1].timestampMillis) : null;
+                    const showDateHeader = currentLabel !== prevLabel;
 
-                  return (
-                    <React.Fragment key={m.id || m.timestampMillis || index}>
-                      {showDateHeader && (
-                        <div className="flex justify-center my-3 select-none animate-fade-in z-10">
-                          <span className="bg-[#1e293b]/95 text-slate-200 text-[11px] font-bold px-4 py-1 rounded-full border border-slate-700/80 shadow-md tracking-wider uppercase">
-                            {currentLabel}
-                          </span>
+                    return (
+                      <React.Fragment key={m.id || m.timestampMillis || index}>
+                        {showDateHeader && (
+                          <div className="flex justify-center my-3 select-none animate-fade-in z-10">
+                            <span className="bg-[#1e293b]/95 text-slate-200 text-[11px] font-bold px-4 py-1 rounded-full border border-slate-700/80 shadow-md tracking-wider uppercase">
+                              {currentLabel}
+                            </span>
+                          </div>
+                        )}
+                        <div className="message-bubble-item w-full">
+                          <MessageBubble
+                            message={m}
+                            currentUser={currentUser}
+                            onReply={handleStartReply}
+                            onEdit={handleStartEdit}
+                            onDeleteForMe={handleDeleteForMe}
+                            onDeleteForEveryone={handleDeleteForEveryone}
+                            formatTimeSafe={formatTimeSafe}
+                            isSelectMode={isSelectMode}
+                            isSelected={selectedMessageIds.includes(m.id)}
+                            onSelectToggle={handleSelectToggle}
+                            onStartSelectMode={handleStartSelectMode}
+                            isGroup={isGroupChat}
+                            chatId={activeChat?.id || activeChat?.chatId || activeChat?.roomId}
+                          />
                         </div>
-                      )}
-                      <MessageBubble
-                        message={m}
-                        currentUser={currentUser}
-                        onReply={handleStartReply}
-                        onEdit={handleStartEdit}
-                        onDeleteForMe={handleDeleteForMe}
-                        onDeleteForEveryone={handleDeleteForEveryone}
-                        formatTimeSafe={formatTimeSafe}
-                        isSelectMode={isSelectMode}
-                        isSelected={selectedMessageIds.includes(m.id)}
-                        onSelectToggle={handleSelectToggle}
-                        onStartSelectMode={handleStartSelectMode}
-                        isGroup={isGroupChat}
-                      />
-                    </React.Fragment>
-                  );
-                });
-              })()
-            ) : (
-              /* ⚪ IF DONE & NO MESSAGES: EXCLUSIVELY SHOW EMPTY STATE */
-              <div className="text-center py-20 animate-fade-in">
-                <span className="text-4xl block mb-2 animate-bounce">👋</span>
-                <p className="text-sm text-slate-300 font-medium">Say hi to your new friend! 👋</p>
-                <p className="text-[11px] text-slate-500 mt-1 max-w-xs mx-auto">Send a message to {recipientName} to begin chatting.</p>
-              </div>
-            )}
-          </AnimatePresence>
-          <div ref={messagesEndRef} />
-        </div>
+                      </React.Fragment>
+                    );
+                  });
+                })()
+              ) : (
+                /* ⚪ IF DONE & NO MESSAGES: EXCLUSIVELY SHOW EMPTY STATE */
+                <div className="text-center py-20 animate-fade-in">
+                  <span className="text-4xl block mb-2 animate-bounce">👋</span>
+                  <p className="text-sm text-slate-300 font-medium">Say hi to your new friend! 👋</p>
+                  <p className="text-[11px] text-slate-500 mt-1 max-w-xs mx-auto">Send a message to {recipientName} to begin chatting.</p>
+                </div>
+              )}
+            </AnimatePresence>
+            <div ref={messagesEndRef} className="h-2 flex-shrink-0" />
+          </div>
+        </main>
 
         {/* Reply/Edit Active Display Indicator & Footer Input Bar */}
         <div className="border-t border-slate-900 bg-[#0B111E] z-10 relative">
@@ -899,7 +1003,7 @@ export default function ChatWindow() {
                   type="file" 
                   ref={fileInputRef} 
                   onChange={handleFileChange} 
-                  accept=".mp4,.mp3,.png,.jpg,.jpeg,.webm" 
+                  accept="image/*,.pdf,.doc,.docx,.txt,.mp4,.mp3,.webm" 
                   className="hidden" 
                 />
                 <button 

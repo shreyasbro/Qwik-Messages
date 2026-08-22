@@ -7,8 +7,12 @@ import { useRecipient } from '../../hooks/useRecipient';
 import { safeString } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
 import ProfileEditorModal from '../profile/ProfileEditorModal';
+import PresenceBadge from '../profile/PresenceBadge';
 import SupportFAQ from './SupportFAQ';
 import CreateGroupModal from './CreateGroupModal';
+import StatusBar from './StatusBar';
+import StatusUploadModal from './StatusUploadModal';
+import StatusViewerModal from './StatusViewerModal';
 
 function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
   const isGroup = chat.isGroup || chat.type === 'group';
@@ -19,7 +23,9 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
     ? (chat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(chatName)}&background=0d9488&color=fff&bold=true`) 
     : (recipient?.photoURL || userService.resolveAvatar({ displayName: chatName }));
     
-  const isActive = activeChat?.chatId === chat.chatId || activeChat?.id === chat.id;
+  const activeTargetId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+  const currentChatId = chat.id || chat.chatId || chat.roomId;
+  const isActive = Boolean(activeTargetId && currentChatId && activeTargetId === currentChatId);
 
   // Real-time typing status tracking state
   const [isTyping, setIsTyping] = React.useState(false);
@@ -58,14 +64,15 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
         }
         if (!recipient) return;
         setActiveChat({
-          chatId: chat.chatId,
+          id: chat.id || chat.chatId,
+          chatId: chat.id || chat.chatId,
           recipient: recipient,
           participants: chat.participants
         });
       }}
       className={`flex items-center gap-4 p-3.5 mx-2 mb-1.5 rounded-2xl cursor-pointer transition-all duration-300 ease-in-out border ${
         isActive 
-          ? 'bg-slate-800/60 border-slate-700/50 shadow-lg shadow-black/25' 
+          ? 'bg-teal-500/10 border-teal-500/40 shadow-lg shadow-black/25' 
           : 'bg-transparent border-transparent hover:bg-slate-800/40 hover:border-slate-700/50'
       }`}
     >
@@ -82,13 +89,11 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
         />
         {isTyping ? (
           <span 
-            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-emerald-500 flex items-center justify-center shadow-[0_0_10px_rgba(16,185,129,0.7)] animate-pulse"
+            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-emerald-500 flex items-center justify-center shadow-[0_0_10px_rgba(16,185,129,0.7)] animate-pulse z-10"
           />
-        ) : (
-          <span 
-            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-slate-500 scale-90"
-          />
-        )}
+        ) : !isGroup ? (
+          <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
+        ) : null}
       </div>
       <div className="flex-grow min-w-0 text-left">
         <div className="flex justify-between items-center mb-1">
@@ -157,7 +162,25 @@ export default function ChatSidebar() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsView, setSettingsView] = useState("main"); // 'main' | 'privacy'
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [activeStatusView, setActiveStatusView] = useState(null);
+  const [statusSessionKey, setStatusSessionKey] = useState(0);
+
+  const handleOpenStatusViewer = (statuses) => {
+    if (!statuses || statuses.length === 0) return;
+    setActiveStatusView([...statuses]);
+    setStatusSessionKey(Date.now());
+  };
+
+  const [comingSoonFeature, setComingSoonFeature] = useState(null);
   const addMenuRef = React.useRef(null);
+
+  const triggerComingSoon = (featureTitle) => {
+    setComingSoonFeature(featureTitle);
+    setTimeout(() => {
+      setComingSoonFeature(null);
+    }, 2800);
+  };
 
   React.useEffect(() => {
     const handleOutsideClick = (e) => {
@@ -256,15 +279,18 @@ export default function ChatSidebar() {
           return (
             <div className="flex items-center gap-3 cursor-pointer overflow-hidden group" onClick={() => setShowProfileModal(true)}>
               {/* Dynamic Bordered Avatar Frame */}
-              <div 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setPreviewImage(userAvatarUrl);
-                }}
-                title="View profile picture"
-                className="relative w-10 h-10 rounded-full overflow-hidden border border-teal-500/40 bg-slate-800 flex items-center justify-center shrink-0 cursor-pointer hover:scale-105 transition-transform"
-              >
-                <img src={userAvatarUrl} alt="User Account" className="w-full h-full object-cover" />
+              <div className="relative w-10 h-10 shrink-0">
+                <div 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPreviewImage(userAvatarUrl);
+                  }}
+                  title="View profile picture"
+                  className="w-full h-full rounded-full overflow-hidden border border-teal-500/40 bg-slate-800 flex items-center justify-center cursor-pointer hover:scale-105 transition-transform"
+                >
+                  <img src={userAvatarUrl} alt="User Account" className="w-full h-full object-cover" />
+                </div>
+                <PresenceBadge status={userProfile?.presenceStatus || 'online'} className="absolute bottom-0 right-0 z-10 scale-90" />
               </div>
 
               {/* Account Identity Node */}
@@ -287,12 +313,27 @@ export default function ChatSidebar() {
           <button
             type="button"
             onClick={() => setIsSettingsOpen(true)}
-            title="App Settings"
-            className="p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-450 hover:text-teal-400 transition-all cursor-pointer shadow-sm"
+            title="Settings"
+            className="p-2 text-white hover:text-teal-400 bg-white/5 hover:bg-white/10 border border-white/15 hover:border-white/30 rounded-xl transition-all duration-200 shadow-sm flex items-center justify-center group"
           >
-            <svg className="w-4 h-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            <svg 
+              className="w-4 h-4 text-white group-hover:text-teal-400 transition-colors" 
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" 
+              />
+              <path 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                strokeWidth={2} 
+                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" 
+              />
             </svg>
           </button>
 
@@ -347,6 +388,13 @@ export default function ChatSidebar() {
         </div>
       </div>
 
+      {/* StatusBar Mount */}
+      <StatusBar 
+        currentUser={currentUser} 
+        onOpenViewer={handleOpenStatusViewer} 
+        onOpenUpload={() => setShowUploadModal(true)} 
+      />
+
       {/* Chat Room Stream List */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1">
         {chatsLoading ? (
@@ -381,7 +429,7 @@ export default function ChatSidebar() {
       {/* Create Group Modal */}
       <CreateGroupModal isOpen={isGroupCreateOpen} onClose={() => setIsGroupCreateOpen(false)} />
 
-      {/* Profile Editor Modal */}
+       {/* Profile Editor Modal */}
       <ProfileEditorModal 
         isOpen={showProfileModal} 
         onClose={() => setShowProfileModal(false)} 
@@ -389,9 +437,27 @@ export default function ChatSidebar() {
         userProfile={userProfile}
       />
 
+      {/* Status Upload Modal */}
+      {showUploadModal && (
+        <StatusUploadModal 
+          currentUser={currentUser} 
+          onClose={() => setShowUploadModal(false)} 
+        />
+      )}
+
+      {/* Status Viewer Modal */}
+      {activeStatusView && (
+        <StatusViewerModal 
+          key={statusSessionKey}
+          statuses={activeStatusView} 
+          currentUser={currentUser}
+          onClose={() => setActiveStatusView(null)} 
+        />
+      )}
+
       {/* ⚙️ WHATSAPP-STYLE SETTINGS DRAWER (Slides in from left) */}
       {isSettingsOpen && (
-        <div className="fixed inset-y-0 left-0 z-50 w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 backdrop-blur-3xl flex flex-col shadow-2xl animate-fade-in select-none animate-slide-in">
+        <div className="fixed inset-y-0 left-0 z-50 w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 backdrop-blur-3xl flex flex-col shadow-2xl animate-drawer-slide-in select-none">
           
           {/* Header */}
           <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/40">
@@ -413,56 +479,86 @@ export default function ChatSidebar() {
             /* Settings List (WhatsApp Style Menu) */
             <div className="flex-1 overflow-y-auto p-4 space-y-3 text-left">
               
-              {/* 1. Privacy Settings */}
-              <div 
-                onClick={() => setSettingsView("privacy")}
-                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-teal-500/50 transition-all cursor-pointer group"
+              {/* 1. PRIVACY SETTINGS */}
+              <button
+                type="button"
+                onClick={() => triggerComingSoon('Privacy Settings')}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">🔒</span>
-                    <div>
-                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Privacy Settings</p>
-                      <p className="text-[11px] text-slate-400">Read receipts, Last seen, Profile photo</p>
-                    </div>
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
+                    🔒
                   </div>
-                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
+                        Privacy Settings
+                      </span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                        Soon
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">Read receipts, Last seen, Profile photo</p>
+                  </div>
                 </div>
-              </div>
+                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
 
-              {/* 2. Change Email Feature */}
-              <div 
-                onClick={() => alert("📧 The 'Change Email Address' feature is currently under development and will be available in the next update!")}
-                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group"
+              {/* 2. CHANGE EMAIL ADDRESS */}
+              <button
+                type="button"
+                onClick={() => triggerComingSoon('Change Email Address')}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">📧</span>
-                    <div>
-                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Change Email Address</p>
-                      <p className="text-[11px] text-slate-400">Update primary security credentials</p>
-                    </div>
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
+                    ✉️
                   </div>
-                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
+                        Change Email Address
+                      </span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                        Soon
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">Update primary security credentials</p>
+                  </div>
                 </div>
-              </div>
+                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
 
-              {/* 3. Link Second Account */}
-              <div 
-                onClick={() => alert("🔗 The 'Add or Link Account' feature is currently under development and will be available in the next update!")}
-                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-slate-700 transition-all cursor-pointer group"
+              {/* 3. ADD OR LINK ACCOUNT */}
+              <button
+                type="button"
+                onClick={() => triggerComingSoon('Multi-Account Linking')}
+                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">👥</span>
-                    <div>
-                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Add or Link Account</p>
-                      <p className="text-[11px] text-slate-400">Switch between multi-user profiles</p>
-                    </div>
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
+                    👥
                   </div>
-                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
+                        Add or Link Account
+                      </span>
+                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
+                        Soon
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">Switch between multi-user profiles</p>
+                  </div>
                 </div>
-              </div>
+                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
 
               {/* ⚡ 4. Support & FAQ Accordion Section */}
               <div 
@@ -600,6 +696,21 @@ export default function ChatSidebar() {
             </div>
           )}
 
+        </div>
+      )}
+
+      {/* DYNAMIC COMING SOON TOAST */}
+      {comingSoonFeature && (
+        <div className="fixed bottom-6 left-0 right-0 z-[100] flex justify-center pointer-events-none px-4">
+          <div className="flex items-center gap-3 px-4 py-3 rounded-2xl bg-slate-900/95 border border-teal-500/50 shadow-2xl backdrop-blur-xl animate-toast-slide-in pointer-events-auto select-none max-w-sm w-full">
+            <div className="w-8 h-8 rounded-xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-300 shrink-0">
+              ⏳
+            </div>
+            <div className="text-left min-w-0">
+              <div className="text-xs font-bold text-white truncate">{comingSoonFeature} is coming soon!</div>
+              <div className="text-[11px] text-slate-400">This capability will be unlocked in the next major update.</div>
+            </div>
+          </div>
         </div>
       )}
 

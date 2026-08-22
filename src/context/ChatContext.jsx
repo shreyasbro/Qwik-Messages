@@ -8,9 +8,23 @@ const ChatContext = createContext();
 export function ChatProvider({ children }) {
   const { currentUser } = useAuth();
   const [chats, setChats] = useState([]);
-  const [activeChat, setActiveChat] = useState(null);
+  const [activeChat, setActiveChatState] = useState(null);
   const [messages, setMessages] = useState([]);
   const [chatsLoading, setChatsLoading] = useState(true);
+
+  // Helper to safely select / persist active chat
+  const setActiveChat = (chatOrUpdater) => {
+    setActiveChatState((prev) => {
+      const nextChat = typeof chatOrUpdater === 'function' ? chatOrUpdater(prev) : chatOrUpdater;
+      const targetId = nextChat?.id || nextChat?.chatId || nextChat?.roomId || null;
+      if (targetId) {
+        sessionStorage.setItem('qwik_active_chat_id', targetId);
+      } else {
+        sessionStorage.removeItem('qwik_active_chat_id');
+      }
+      return nextChat;
+    });
+  };
 
   // Subscribe to Chats collection where participants array contains currentUser.uid
   useEffect(() => {
@@ -48,6 +62,52 @@ export function ChatProvider({ children }) {
 
     return unsubscribe;
   }, [currentUser]);
+
+  // Restore active chat from sessionStorage or sync with chats stream updates
+  useEffect(() => {
+    if (chats.length === 0) return;
+
+    const savedChatId = sessionStorage.getItem('qwik_active_chat_id');
+    const currentActiveId = activeChat?.id || activeChat?.chatId || activeChat?.roomId || savedChatId;
+
+    if (currentActiveId) {
+      const matchedChat = chats.find(c => (c.id === currentActiveId || c.chatId === currentActiveId || c.roomId === currentActiveId));
+      if (matchedChat) {
+        setActiveChatState(prev => {
+          // If no activeChat is currently set, restore the full matchedChat
+          if (!prev) {
+            const isGroup = matchedChat.isGroup || matchedChat.type === 'group';
+            if (isGroup) {
+              return {
+                id: matchedChat.id || matchedChat.chatId,
+                chatId: matchedChat.id || matchedChat.chatId,
+                groupName: matchedChat.groupName,
+                groupAvatar: matchedChat.groupAvatar || null,
+                groupDescription: matchedChat.groupDescription || '',
+                admins: matchedChat.admins || [matchedChat.createdBy],
+                onlyAdminsCanMessage: matchedChat.onlyAdminsCanMessage || false,
+                participants: matchedChat.participants,
+                createdBy: matchedChat.createdBy,
+                isGroup: true,
+                type: 'group'
+              };
+            }
+            return {
+              id: matchedChat.id || matchedChat.chatId,
+              chatId: matchedChat.id || matchedChat.chatId,
+              participants: matchedChat.participants,
+              ...matchedChat
+            };
+          }
+          // Merge recent updates without changing active selection reference unnecessarily
+          return {
+            ...prev,
+            ...matchedChat
+          };
+        });
+      }
+    }
+  }, [chats]);
 
   // Subscribe to Messages of the Active Chat
   useEffect(() => {
@@ -88,20 +148,7 @@ export function ChatProvider({ children }) {
     });
 
     return unsubscribe;
-  }, [activeChat, currentUser]);
-
-  // Auto-update activeChat references if chats list updates (e.g. metadata or lastMessage changes)
-  useEffect(() => {
-    if (!activeChat) return;
-    const activeId = activeChat.chatId || activeChat.id || activeChat.roomId;
-    const updated = chats.find(c => c.id === activeId);
-    if (updated) {
-      setActiveChat(prev => ({
-        ...prev,
-        ...updated
-      }));
-    }
-  }, [chats]);
+  }, [activeChat?.id, activeChat?.chatId, activeChat?.roomId, currentUser?.uid]);
 
   const [activeMobileTab, setActiveMobileTab] = useState('sidebar');
   const [previewImage, setPreviewImage] = useState(null);
@@ -113,7 +160,7 @@ export function ChatProvider({ children }) {
     } else {
       setActiveMobileTab('sidebar');
     }
-  }, [activeChat]);
+  }, [activeChat ? (activeChat.id || activeChat.chatId || activeChat.roomId) : null]);
 
   const value = {
     chats,
