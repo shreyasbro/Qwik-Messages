@@ -41,27 +41,50 @@ export default function MessageBubble({
     if (onShowToast) onShowToast(text);
   };
 
-  // 1. DOWNLOAD MEDIA (IMAGE, VIDEO, AUDIO, DOC)
-  const handleDownloadMedia = async () => {
+  // 1. DOWNLOAD / SAVE MEDIA (NATIVE MOBILE SAVE TO GALLERY & DESKTOP FALLBACK)
+  const handleDownloadMedia = async (e) => {
+    if (e) e.stopPropagation();
     if (!message.mediaUrl) return;
     setMenuOpen(false);
     triggerToast('Downloading media...');
 
     try {
       const res = await fetch(message.mediaUrl);
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      
+      const rawBlob = await res.blob();
+
       const fileExt = message.fileExt || (message.type === 'image' ? 'jpg' : message.type === 'video' ? 'mp4' : 'mp3');
+      let mimeType = rawBlob.type || (message.type === 'image' ? 'image/jpeg' : message.type === 'video' ? 'video/mp4' : message.type === 'audio' ? 'audio/mpeg' : 'application/octet-stream');
       const fileName = message.fileName || `Qwik_${message.type || 'media'}_${Date.now()}.${fileExt}`;
 
+      const typedBlob = new Blob([rawBlob], { type: mimeType });
+      const file = new File([typedBlob], fileName, { type: mimeType });
+
+      // 1. MOBILE NATIVE SAVE (Supports direct Save to Gallery / Camera Roll)
+      const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: fileName,
+            text: 'Save media from Qwik Messages',
+          });
+          triggerToast('Media shared / saved!');
+          return;
+        } catch (shareErr) {
+          if (shareErr.name === 'AbortError') return; // User closed share sheet
+          console.warn('Native share failed, falling back to blob download:', shareErr);
+        }
+      }
+
+      // 2. DESKTOP / DIRECT BROWSER DOWNLOAD FALLBACK
+      const objectUrl = window.URL.createObjectURL(typedBlob);
       const link = document.createElement('a');
-      link.href = url;
+      link.href = objectUrl;
       link.download = fileName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(objectUrl);
       triggerToast('Download complete!');
     } catch (err) {
       console.error('Download failed:', err);

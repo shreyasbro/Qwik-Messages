@@ -12,7 +12,7 @@ import PresenceBadge from '../profile/PresenceBadge';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { auth, db } from '../../firebaseConfig';
-import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, arrayUnion, arrayRemove, query, orderBy, limit, getDocs, onSnapshot } from 'firebase/firestore';
+import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, updateDoc, arrayUnion, arrayRemove, query, orderBy, limit, getDocs, onSnapshot, deleteField } from 'firebase/firestore';
 import axios from 'axios';
 import JitsiCallRoom from '../JitsiCallRoom';
 import UserSearchModal from './UserSearchModal';
@@ -36,6 +36,9 @@ export default function ChatWindow() {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
+  const [pinnedMessage, setPinnedMessage] = useState(null);
+  const [mediaTab, setMediaTab] = useState('photos'); // 'photos' | 'videos' | 'docs'
+  const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
   const [toastMessage, setToastMessage] = useState(null);
   const toastTimeoutRef = useRef(null);
   const attachMenuRef = useRef(null);
@@ -267,6 +270,163 @@ export default function ChatWindow() {
       if (timeoutId) clearTimeout(timeoutId);
       unsubscribe();
     };
+  }, [roomId]);
+
+  // Real-time listener for chat document (pinned messages & metadata)
+  useEffect(() => {
+    if (!roomId) {
+      setPinnedMessage(null);
+      return;
+    }
+
+    const chatDocRef = doc(db, 'chats', roomId);
+    const unsubscribe = onSnapshot(chatDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setPinnedMessage(data.pinnedMessage || null);
+      } else {
+        setPinnedMessage(null);
+      }
+    }, (err) => {
+      console.warn("Could not listen to chat document updates:", err);
+    });
+
+    return () => unsubscribe();
+  }, [roomId]);
+
+  // Robust Unpin Handler with Optimistic UI Update and deleteField
+  const handleUnpinMessage = async (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    if (!roomId) return;
+
+    // 1. Instant Optimistic UI Clear
+    setPinnedMessage(null);
+
+    try {
+      const chatDocRef = doc(db, 'chats', roomId);
+      // 2. Completely remove the pinnedMessage field from Firestore
+      await updateDoc(chatDocRef, {
+        pinnedMessage: deleteField()
+      });
+
+      showToast('Message unpinned 📌');
+    } catch (err) {
+      console.error('Error unpinning message:', err);
+      // Fallback: try setting to null if deleteField fails
+      try {
+        const chatDocRef = doc(db, 'chats', roomId);
+        await updateDoc(chatDocRef, { pinnedMessage: null });
+        showToast('Message unpinned 📌');
+      } catch (fallbackErr) {
+        console.error('Fallback unpin failed:', fallbackErr);
+      }
+    }
+  };
+
+  // Helper: Extract valid media URL from any legacy/new message schema
+  const getValidMediaUrl = (msg) => {
+    return msg.mediaUrl || msg.imageUrl || msg.fileUrl || msg.url || msg.attachment || null;
+  };
+
+  // Helper: Detect file extension from URL or fileName
+  const detectFileExtension = (msg, mediaUrl) => {
+    if (msg.fileExt) return msg.fileExt.toLowerCase();
+    if (msg.fileName && msg.fileName.includes('.')) {
+      return msg.fileName.split('.').pop().toLowerCase();
+    }
+    if (typeof mediaUrl === 'string') {
+      const cleanUrl = mediaUrl.split('?')[0];
+      const parts = cleanUrl.split('.');
+      if (parts.length > 1) {
+        return parts.pop().toLowerCase();
+      }
+    }
+    return '';
+  };
+
+  // Real-time comprehensive historical media query (without strict Firestore orderBy to catch all legacy docs)
+  useEffect(() => {
+    if (!roomId) {
+      setAllMediaItems({ photos: [], videos: [], docs: [] });
+      return;
+    }
+
+    const messagesRef = collection(db, 'chats', roomId, 'messages');
+
+    const unsubscribe = onSnapshot(messagesRef, (snapshot) => {
+      const rawMessages = snapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+
+      // Client-side Safe Sort (Newest First)
+      rawMessages.sort((a, b) => {
+        const timeA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
+        const timeB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const photos = [];
+      const videos = [];
+      const docs = [];
+
+      rawMessages.forEach((msg) => {
+        if (msg.isDeleted) return; // Skip deleted items
+
+        const mediaUrl = getValidMediaUrl(msg);
+        if (!mediaUrl) return; // Skip pure text messages
+
+        const ext = detectFileExtension(msg, mediaUrl);
+        const msgType = (msg.type || '').toLowerCase();
+
+        const itemPayload = {
+          id: msg.id,
+          mediaUrl: mediaUrl,
+          fileName: msg.fileName || `File_${msg.id.slice(0, 5)}.${ext || 'dat'}`,
+          fileSize: msg.fileSize || 'Media',
+          fileExt: ext,
+          createdAt: msg.createdAt,
+        };
+
+        // 1. Photos Matching
+        if (
+          msgType === 'image' ||
+          msgType === 'photo' ||
+          ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'bmp'].includes(ext) ||
+          (typeof mediaUrl === 'string' && mediaUrl.includes('/image/upload/'))
+        ) {
+          photos.push(itemPayload);
+        }
+        // 2. Videos Matching
+        else if (
+          msgType === 'video' ||
+          ['mp4', 'mov', 'webm', 'mkv', 'avi'].includes(ext) ||
+          (typeof mediaUrl === 'string' && mediaUrl.includes('/video/upload/'))
+        ) {
+          videos.push(itemPayload);
+        }
+        // 3. Documents Matching
+        else if (
+          msgType === 'document' ||
+          msgType === 'doc' ||
+          msgType === 'file' ||
+          ['pdf', 'doc', 'docx', 'txt', 'ppt', 'pptx', 'xls', 'xlsx', 'zip', 'rar', 'csv'].includes(ext) ||
+          (typeof mediaUrl === 'string' && mediaUrl.includes('/raw/upload/'))
+        ) {
+          docs.push(itemPayload);
+        }
+      });
+
+      setAllMediaItems({ photos, videos, docs });
+    }, (err) => {
+      console.warn("Historical media query error:", err);
+    });
+
+    return () => unsubscribe();
   }, [roomId]);
 
   useEffect(() => {
@@ -767,38 +927,30 @@ export default function ChatWindow() {
         </div>
 
         {/* PINNED MESSAGE BANNER */}
-        {activeChat?.pinnedMessage && (
-          <div className="flex items-center justify-between px-4 py-2 bg-gray-900/90 border-b border-gray-800/80 backdrop-blur-sm z-20 select-none animate-in fade-in duration-150">
-            <div className="flex items-center gap-2.5 min-w-0">
+        {pinnedMessage && (
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-900/95 border-b border-teal-500/20 backdrop-blur-md z-20 animate-in fade-in slide-in-from-top-2 duration-150 shadow-md select-none">
+            {/* Pinned Text Preview */}
+            <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-3">
               <div className="w-6 h-6 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
               </div>
               <div className="text-xs truncate">
                 <span className="font-bold text-teal-400 mr-1.5">Pinned:</span>
-                <span className="text-gray-300">{activeChat.pinnedMessage.text}</span>
+                <span className="text-gray-200">{pinnedMessage.text || 'Message'}</span>
               </div>
             </div>
 
-            {/* Unpin Action */}
+            {/* Close / Unpin Button */}
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  const targetChatId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
-                  if (!targetChatId) return;
-                  await updateDoc(doc(db, 'chats', targetChatId), { pinnedMessage: null });
-                  showToast('Message unpinned');
-                } catch (err) {
-                  console.error('Failed to unpin message:', err);
-                }
-              }}
-              className="p-1 text-gray-500 hover:text-rose-400 transition-colors cursor-pointer"
-              title="Unpin message"
+              onClick={handleUnpinMessage}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors shrink-0 cursor-pointer"
+              title="Unpin Message"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
@@ -1574,31 +1726,188 @@ export default function ChatWindow() {
                     </p>
                   </div>
 
-                  {/* Subtle Divider */}
-                  <div className="h-px w-full bg-slate-800/50"></div>
+                  {/* SHARED MEDIA, VIDEOS & DOCUMENTS HUB */}
+                  {(() => {
+                    const photoList = allMediaItems.photos || [];
+                    const videoList = allMediaItems.videos || [];
+                    const docList = allMediaItems.docs || [];
+                    const totalMediaCount = photoList.length + videoList.length + docList.length;
 
-                  {/* Last Active Status */}
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">Last Active</p>
-                    <div className="flex items-center gap-2.5">
-                      {recipient?.status === 'ONLINE' || recipient?.isOnline ? (
-                        <>
-                          <span className="relative flex h-2.5 w-2.5 shrink-0">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-teal-500"></span>
-                          </span>
-                          <span className="text-sm font-bold text-teal-400">Online Now</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="inline-flex rounded-full h-2.5 w-2.5 bg-slate-600 shrink-0"></span>
-                          <span className="text-sm font-medium text-slate-400">
-                            {recipient?.lastActive ? `Last seen ${recipient.lastActive}` : "Last seen recently"}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
+                    return (
+                      <>
+                        <div className="h-px w-full bg-slate-800/50"></div>
+                        <div className="flex flex-col gap-2.5 pt-1 text-left">
+                          {/* SECTION TITLE & TAB BAR */}
+                          <div className="flex items-center justify-between px-0.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                              Shared Media & Files
+                            </span>
+                            <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 border border-teal-500/30">
+                              {totalMediaCount} Total
+                            </span>
+                          </div>
+
+                          {/* SEGMENTED TABS */}
+                          <div className="grid grid-cols-3 gap-1 bg-gray-950/80 p-1 rounded-xl border border-gray-800">
+                            <button
+                              type="button"
+                              onClick={() => setMediaTab('photos')}
+                              className={`py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                                mediaTab === 'photos'
+                                  ? 'bg-teal-500 text-gray-950 shadow'
+                                  : 'text-gray-400 hover:text-white'
+                              }`}
+                            >
+                              <span>Photos</span>
+                              <span className="text-[9px] opacity-75">({photoList.length})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setMediaTab('videos')}
+                              className={`py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                                mediaTab === 'videos'
+                                  ? 'bg-teal-500 text-gray-950 shadow'
+                                  : 'text-gray-400 hover:text-white'
+                              }`}
+                            >
+                              <span>Videos</span>
+                              <span className="text-[9px] opacity-75">({videoList.length})</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setMediaTab('docs')}
+                              className={`py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                                mediaTab === 'docs'
+                                  ? 'bg-teal-500 text-gray-950 shadow'
+                                  : 'text-gray-400 hover:text-white'
+                              }`}
+                            >
+                              <span>Docs</span>
+                              <span className="text-[9px] opacity-75">({docList.length})</span>
+                            </button>
+                          </div>
+
+                          {/* TAB 1: PHOTOS GRID */}
+                          {mediaTab === 'photos' && (
+                            <div className="max-h-52 overflow-y-auto custom-scrollbar pr-0.5">
+                              {photoList.length > 0 ? (
+                                <div className="grid grid-cols-3 gap-1.5">
+                                  {photoList.map((photo) => (
+                                    <div
+                                      key={photo.id}
+                                      onClick={() => window.open(photo.mediaUrl, '_blank')}
+                                      className="group relative aspect-square rounded-xl overflow-hidden bg-gray-950 border border-gray-800 cursor-pointer"
+                                    >
+                                      <img
+                                        src={photo.mediaUrl}
+                                        alt="shared photo"
+                                        className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                        loading="lazy"
+                                      />
+                                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                        <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                        </svg>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-center py-5 text-gray-500 text-xs">
+                                  <svg className="w-6 h-6 mx-auto mb-1 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
+                                  No shared photos
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* TAB 2: VIDEOS GRID */}
+                          {mediaTab === 'videos' && (
+                            <div className="max-h-52 overflow-y-auto custom-scrollbar pr-0.5">
+                              {videoList.length > 0 ? (
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  {videoList.map((video) => (
+                                    <div
+                                      key={video.id}
+                                      onClick={() => window.open(video.mediaUrl, '_blank')}
+                                      className="relative aspect-video rounded-xl overflow-hidden bg-gray-950 border border-gray-800 cursor-pointer group flex items-center justify-center"
+                                    >
+                                      <video src={video.mediaUrl} className="w-full h-full object-cover" preload="metadata" />
+                                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center group-hover:bg-black/60 transition-colors">
+                                        <div className="w-7 h-7 rounded-full bg-teal-500/90 text-gray-950 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                                          <svg className="w-3.5 h-3.5 fill-current translate-x-0.5" viewBox="0 0 24 24">
+                                            <path d="M8 5v14l11-7z" />
+                                          </svg>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="text-center py-5 text-gray-500 text-xs">
+                                  <svg className="w-6 h-6 mx-auto mb-1 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                  </svg>
+                                  No shared videos
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* TAB 3: DOCUMENTS LIST */}
+                          {mediaTab === 'docs' && (
+                            <div className="max-h-52 overflow-y-auto custom-scrollbar pr-0.5 space-y-1.5">
+                              {docList.length > 0 ? (
+                                docList.map((docItem) => {
+                                  const fileExt = docItem.fileExt || docItem.fileName?.split('.').pop() || 'DOC';
+                                  return (
+                                    <div
+                                      key={docItem.id}
+                                      onClick={() => window.open(docItem.mediaUrl, '_blank')}
+                                      className="flex items-center gap-2.5 p-2 rounded-xl bg-gray-950/70 hover:bg-gray-950 border border-gray-800/80 cursor-pointer transition-colors group text-left"
+                                    >
+                                      {/* Extension Badge */}
+                                      <div className={`w-7 h-7 rounded-lg flex flex-col items-center justify-center shrink-0 font-bold uppercase text-[8px] text-white ${
+                                        fileExt.toLowerCase() === 'pdf' ? 'bg-rose-600' : 'bg-blue-600'
+                                      }`}>
+                                        {fileExt}
+                                      </div>
+
+                                      {/* File info */}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="text-xs font-semibold text-gray-200 truncate group-hover:text-teal-300 transition-colors" title={docItem.fileName || 'Document'}>
+                                          {docItem.fileName || 'Document File'}
+                                        </div>
+                                        <div className="text-[10px] text-gray-500">
+                                          {docItem.fileSize || 'File'}
+                                        </div>
+                                      </div>
+
+                                      {/* Open / Download Icon */}
+                                      <svg className="w-3.5 h-3.5 text-gray-500 group-hover:text-teal-400 transition-colors shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                      </svg>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div className="text-center py-5 text-gray-500 text-xs">
+                                  <svg className="w-6 h-6 mx-auto mb-1 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                  </svg>
+                                  No shared documents
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   {/* Privacy and Relationship Controls Section */}
                   {!activeChat.type || activeChat.type === 'direct' ? (
