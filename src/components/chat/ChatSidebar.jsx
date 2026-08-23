@@ -27,10 +27,15 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   const currentChatId = chat.id || chat.chatId || chat.roomId;
   const isActive = Boolean(activeTargetId && currentChatId && activeTargetId === currentChatId);
 
-  // Real-time typing status calculation from Firestore chat document
+  // Real-time typing status calculation from Firestore chat document (1-second fast sync)
   const isTyping = Boolean(
     chat?.typingUsers && 
-    Object.keys(chat.typingUsers).some(uid => uid !== currentUser?.uid && chat.typingUsers[uid] === true)
+    Object.entries(chat.typingUsers).some(([uid, val]) => {
+      if (uid === currentUser?.uid || !val) return false;
+      if (val === true) return true;
+      const numVal = Number(val);
+      return !isNaN(numVal) && numVal > 0 && (Date.now() - numVal) <= 1200;
+    })
   );
 
   const formatTimeSafe = (timestamp) => {

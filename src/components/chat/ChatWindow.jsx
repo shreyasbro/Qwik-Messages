@@ -41,8 +41,7 @@ export default function ChatWindow() {
   const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
   const [toastMessage, setToastMessage] = useState(null);
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
-  const typingTimeoutRef = useRef(null);
-  const isTypingRef = useRef(false);
+  const lastTypingHeartbeatRef = useRef(0);
   const toastTimeoutRef = useRef(null);
   const attachMenuRef = useRef(null);
 
@@ -54,49 +53,69 @@ export default function ChatWindow() {
     }, 2400);
   };
 
-  // Helper: Sync typing state with Firestore
-  const setTypingStateInFirestore = async (isTyping) => {
+  const typingTimeoutRef = useRef(null);
+
+  // Helper: Emit Typing to Firestore (supports both boolean & timestamp)
+  const handleInputChange = async (e) => {
+    const textVal = e.target.value;
+    setInputText(textVal);
+
+    const currentUid = currentUser?.uid || currentUser?.id;
     const targetRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
-    if (!targetRoomId || !currentUser?.uid) return;
-    
-    if (isTypingRef.current === isTyping) return; // Prevent redundant network calls
-    isTypingRef.current = isTyping;
+    if (!targetRoomId || !currentUid) return;
 
     try {
-      const chatRef = doc(db, 'chats', targetRoomId);
-      if (isTyping) {
-        await updateDoc(chatRef, {
-          [`typingUsers.${currentUser.uid}`]: true,
-        });
-      } else {
-        await updateDoc(chatRef, {
-          [`typingUsers.${currentUser.uid}`]: deleteField(),
-        });
-      }
+      const chatDocRef = doc(db, 'chats', targetRoomId);
+      await setDoc(
+        chatDocRef,
+        {
+          typingUsers: {
+            [currentUid]: true, // Boolean true for instant universal compatibility
+          },
+        },
+        { merge: true }
+      );
+
+      // Reset after 1 second (1000ms) of inactivity
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(async () => {
+        try {
+          await setDoc(
+            chatDocRef,
+            {
+              typingUsers: {
+                [currentUid]: false,
+              },
+            },
+            { merge: true }
+          );
+        } catch (e) {}
+      }, 1000);
     } catch (err) {
-      console.error("Error updating typing state:", err);
+      console.warn('[TypingSync] Could not emit typing:', err.message);
     }
   };
 
-  // Handle Input Change with 2.5s Debounce
-  const handleInputChange = (e) => {
-    setInputText(e.target.value);
+  const clearTypingImmediately = async () => {
+    const currentUid = currentUser?.uid || currentUser?.id;
+    const targetRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!targetRoomId || !currentUid) return;
 
-    if (!isTypingRef.current) {
-      setTypingStateInFirestore(true);
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    try {
+      const chatDocRef = doc(db, 'chats', targetRoomId);
+      await setDoc(
+        chatDocRef,
+        {
+          typingUsers: {
+            [currentUid]: false,
+          },
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.warn('[TypingSync] Clear typing error:', err.message);
     }
-
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-
-    typingTimeoutRef.current = setTimeout(() => {
-      setTypingStateInFirestore(false);
-    }, 2500);
-  };
-
-  // Immediate reset
-  const resetTypingImmediately = () => {
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    setTypingStateInFirestore(false);
   };
   const [activeCall, setActiveCall] = useState({ active: false, type: null }); // type can be 'audio' or 'video'
   const [isGroupSearchOpen, setIsGroupSearchOpen] = useState(false);
@@ -320,39 +339,58 @@ export default function ChatWindow() {
     };
   }, [roomId]);
 
-  // Real-time listener for chat document (pinned messages, typing status & metadata)
+  // Real-time listener for chat document (pinned messages, universal typing status & metadata)
   useEffect(() => {
-    if (!roomId) {
+    const currentUid = currentUser?.uid || currentUser?.id;
+    if (!roomId || !currentUid) {
       setPinnedMessage(null);
       setIsOtherUserTyping(false);
       return;
     }
 
     const chatDocRef = doc(db, 'chats', roomId);
-    const unsubscribe = onSnapshot(chatDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setPinnedMessage(data.pinnedMessage || null);
+    const unsubscribe = onSnapshot(
+      chatDocRef,
+      (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setPinnedMessage(data.pinnedMessage || null);
 
-        // Check if any user OTHER than current logged-in user is typing
-        const typingUsers = data.typingUsers || {};
-        const otherTyping = Object.keys(typingUsers).some(
-          (uid) => uid !== currentUser?.uid && typingUsers[uid] === true
-        );
-        setIsOtherUserTyping(otherTyping);
-      } else {
-        setPinnedMessage(null);
-        setIsOtherUserTyping(false);
+          const typingMap = data.typingUsers || {};
+          const now = Date.now();
+
+          // Check if any other user is currently typing
+          const isOtherTyping = Object.entries(typingMap).some(([uid, val]) => {
+            if (uid === currentUid || !val) return false;
+            
+            // Direct boolean true check
+            if (val === true) return true;
+            
+            // 1-second timestamp fallback threshold
+            const numVal = Number(val);
+            if (!isNaN(numVal) && numVal > 0) {
+              return (now - numVal) <= 1200;
+            }
+
+            return false;
+          });
+
+          setIsOtherUserTyping(isOtherTyping);
+        } else {
+          setPinnedMessage(null);
+          setIsOtherUserTyping(false);
+        }
+      },
+      (err) => {
+        console.warn('[TypingSync] Snapshot listener warning:', err.message);
       }
-    }, (err) => {
-      console.warn("Could not listen to chat document updates:", err);
-    });
+    );
 
     return () => {
       unsubscribe();
-      resetTypingImmediately();
+      clearTypingImmediately();
     };
-  }, [roomId, currentUser?.uid]);
+  }, [roomId, currentUser]);
 
   // Robust Unpin Handler with Optimistic UI Update and deleteField
   const handleUnpinMessage = async (e) => {
@@ -638,7 +676,7 @@ export default function ChatWindow() {
         setReplyingTo(null);
       }
 
-      resetTypingImmediately();
+      await clearTypingImmediately();
       console.log("✅ Message successfully written to Firestore!");
     } catch (err) {
       console.error("🚨 Firebase Write Error:", err);
