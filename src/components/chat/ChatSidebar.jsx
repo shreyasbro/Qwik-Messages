@@ -27,8 +27,11 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   const currentChatId = chat.id || chat.chatId || chat.roomId;
   const isActive = Boolean(activeTargetId && currentChatId && activeTargetId === currentChatId);
 
-  // Real-time typing status tracking state
-  const [isTyping, setIsTyping] = React.useState(false);
+  // Real-time typing status calculation from Firestore chat document
+  const isTyping = Boolean(
+    chat?.typingUsers && 
+    Object.keys(chat.typingUsers).some(uid => uid !== currentUser?.uid && chat.typingUsers[uid] === true)
+  );
 
   const formatTimeSafe = (timestamp) => {
     if (!timestamp) return '';
@@ -89,7 +92,7 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
         />
         {isTyping ? (
           <span 
-            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-emerald-500 flex items-center justify-center shadow-[0_0_10px_rgba(16,185,129,0.7)] animate-pulse z-10"
+            className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-teal-400 flex items-center justify-center shadow-[0_0_10px_rgba(45,212,191,0.7)] animate-pulse z-10"
           />
         ) : !isGroup ? (
           <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
@@ -104,8 +107,8 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
             </span>
           )}
         </div>
-        <div className={`text-[11px] truncate max-w-[180px] font-medium ${isTyping ? "text-emerald-400 font-semibold" : "text-slate-400"}`}>
-          {isTyping ? "typing..." : safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
+        <div className={`text-[11px] truncate max-w-[180px] font-medium ${isTyping ? "text-teal-400 font-bold animate-pulse flex items-center gap-1" : "text-slate-400"}`}>
+          {isTyping ? "✍️ typing..." : safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
         </div>
       </div>
     </div>

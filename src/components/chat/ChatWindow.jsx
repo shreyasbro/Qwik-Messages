@@ -40,6 +40,9 @@ export default function ChatWindow() {
   const [mediaTab, setMediaTab] = useState('photos'); // 'photos' | 'videos' | 'docs'
   const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
   const [toastMessage, setToastMessage] = useState(null);
+  const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
+  const typingTimeoutRef = useRef(null);
+  const isTypingRef = useRef(false);
   const toastTimeoutRef = useRef(null);
   const attachMenuRef = useRef(null);
 
@@ -49,6 +52,51 @@ export default function ChatWindow() {
     toastTimeoutRef.current = setTimeout(() => {
       setToastMessage(null);
     }, 2400);
+  };
+
+  // Helper: Sync typing state with Firestore
+  const setTypingStateInFirestore = async (isTyping) => {
+    const targetRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!targetRoomId || !currentUser?.uid) return;
+    
+    if (isTypingRef.current === isTyping) return; // Prevent redundant network calls
+    isTypingRef.current = isTyping;
+
+    try {
+      const chatRef = doc(db, 'chats', targetRoomId);
+      if (isTyping) {
+        await updateDoc(chatRef, {
+          [`typingUsers.${currentUser.uid}`]: true,
+        });
+      } else {
+        await updateDoc(chatRef, {
+          [`typingUsers.${currentUser.uid}`]: deleteField(),
+        });
+      }
+    } catch (err) {
+      console.error("Error updating typing state:", err);
+    }
+  };
+
+  // Handle Input Change with 2.5s Debounce
+  const handleInputChange = (e) => {
+    setInputText(e.target.value);
+
+    if (!isTypingRef.current) {
+      setTypingStateInFirestore(true);
+    }
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+    typingTimeoutRef.current = setTimeout(() => {
+      setTypingStateInFirestore(false);
+    }, 2500);
+  };
+
+  // Immediate reset
+  const resetTypingImmediately = () => {
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    setTypingStateInFirestore(false);
   };
   const [activeCall, setActiveCall] = useState({ active: false, type: null }); // type can be 'audio' or 'video'
   const [isGroupSearchOpen, setIsGroupSearchOpen] = useState(false);
@@ -272,10 +320,11 @@ export default function ChatWindow() {
     };
   }, [roomId]);
 
-  // Real-time listener for chat document (pinned messages & metadata)
+  // Real-time listener for chat document (pinned messages, typing status & metadata)
   useEffect(() => {
     if (!roomId) {
       setPinnedMessage(null);
+      setIsOtherUserTyping(false);
       return;
     }
 
@@ -284,15 +333,26 @@ export default function ChatWindow() {
       if (docSnap.exists()) {
         const data = docSnap.data();
         setPinnedMessage(data.pinnedMessage || null);
+
+        // Check if any user OTHER than current logged-in user is typing
+        const typingUsers = data.typingUsers || {};
+        const otherTyping = Object.keys(typingUsers).some(
+          (uid) => uid !== currentUser?.uid && typingUsers[uid] === true
+        );
+        setIsOtherUserTyping(otherTyping);
       } else {
         setPinnedMessage(null);
+        setIsOtherUserTyping(false);
       }
     }, (err) => {
       console.warn("Could not listen to chat document updates:", err);
     });
 
-    return () => unsubscribe();
-  }, [roomId]);
+    return () => {
+      unsubscribe();
+      resetTypingImmediately();
+    };
+  }, [roomId, currentUser?.uid]);
 
   // Robust Unpin Handler with Optimistic UI Update and deleteField
   const handleUnpinMessage = async (e) => {
@@ -578,6 +638,7 @@ export default function ChatWindow() {
         setReplyingTo(null);
       }
 
+      resetTypingImmediately();
       console.log("✅ Message successfully written to Firestore!");
     } catch (err) {
       console.error("🚨 Firebase Write Error:", err);
@@ -870,11 +931,22 @@ export default function ChatWindow() {
               <h3 className="text-sm font-black text-white group-hover:text-teal-400 transition-colors truncate">
                 {safeString(recipientName, 'Chat Member')}
               </h3>
-              <p className="text-[10px] text-slate-300 font-medium truncate">
-                {isGroupChat 
-                  ? `${activeChat.participants?.length || 0} members` 
-                  : "Direct Secure Connection"}
-              </p>
+              {isOtherUserTyping ? (
+                <div className="flex items-center gap-1.5 text-xs text-teal-400 font-semibold animate-pulse">
+                  <span>typing</span>
+                  <div className="flex items-center gap-0.5">
+                    <span className="w-1 h-1 bg-teal-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                    <span className="w-1 h-1 bg-teal-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                    <span className="w-1 h-1 bg-teal-400 rounded-full animate-bounce"></span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[10px] text-slate-300 font-medium truncate">
+                  {isGroupChat 
+                    ? `${activeChat.participants?.length || 0} members` 
+                    : "Direct Secure Connection"}
+                </p>
+              )}
             </div>
           </div>
 
@@ -1215,141 +1287,156 @@ export default function ChatWindow() {
             }
 
             return (
-              <div className="flex items-center gap-1.5 w-full px-2 py-2.5 sm:px-4 bg-[#0B111E] border-t border-slate-900/60 box-border">
-                {/* Attachment Menu Popup */}
-                <input 
-                  type="file" 
-                  ref={fileInputRef} 
-                  onChange={handleFileChange} 
-                  accept="image/*,.pdf,.doc,.docx,.txt,.mp4,.mp3,.webm" 
-                  className="hidden" 
-                />
-                <div className="relative flex items-center flex-shrink-0" ref={attachMenuRef}>
-                  <button 
-                    type="button" 
-                    onClick={() => setShowAttachMenu(!showAttachMenu)}
-                    disabled={isUploading}
-                    className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
-                      isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
-                    }`}
-                    title="Add Attachment"
-                  >
-                    {isUploading ? "⏳" : "📎"}
-                  </button>
-
-                  {/* Attachment Popover */}
-                  {showAttachMenu && (
-                    <div className="absolute bottom-14 left-0 z-50 w-44 bg-gray-950/95 border border-slate-800 rounded-2xl shadow-2xl p-1.5 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 flex flex-col gap-1 select-none">
-                      {/* Document / Media Upload Option */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAttachMenu(false);
-                          fileInputRef.current?.click();
-                        }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-slate-800/80 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
-                      >
-                        <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                          </svg>
-                        </div>
-                        <span>Upload File</span>
-                      </button>
-
-                      {/* POLL BUTTON IN ATTACHMENT MENU */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowAttachMenu(false);
-                          setShowPollModal(true);
-                        }}
-                        className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-teal-500/20 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
-                      >
-                        <div className="w-7 h-7 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-                          </svg>
-                        </div>
-                        <span>Create Poll</span>
-                      </button>
+              <div className="flex flex-col w-full">
+                {/* BOTTOM TYPING PILL */}
+                {isOtherUserTyping && (
+                  <div className="px-4 py-1.5 animate-in fade-in slide-in-from-bottom-2 duration-150 text-left">
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-gray-900/90 border border-teal-500/30 text-teal-300 text-xs shadow-md backdrop-blur-md">
+                      <div className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                        <span className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                        <span className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-bounce"></span>
+                      </div>
+                      <span className="font-medium text-[11px]">
+                        {recipientName?.split(' ')[0] || 'User'} is typing...
+                      </span>
                     </div>
-                  )}
-                </div>
-
-                {/* Emoji Trigger */}
-                <div className="relative flex items-center flex-shrink-0">
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.9 }}
-                    type="button"
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                    className="w-9 h-9 bg-slate-900/60 border border-slate-800 rounded-full flex items-center justify-center hover:text-amber-400 transition-colors text-xs cursor-pointer"
-                    title="Select Emoji"
-                  >
-                    😀
-                  </motion.button>
-                  {showEmojiPicker && (
-                    <div className="absolute bottom-14 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
-                      <EmojiPicker 
-                        theme={Theme.DARK} 
-                        emojiStyle={EmojiStyle.GOOGLE}
-                        onEmojiClick={(emojiData) => {
-                          setInputText((prev) => prev + emojiData.emoji);
-                          setShowEmojiPicker(false);
-                        }}
-                        lazyLoadEmojis={true}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                <form onSubmit={handleSendMessage} className="flex-1 flex gap-1.5 items-center min-w-0">
-                  <input
-                    type="text"
-                    placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type your message...")}
-                    disabled={isUploading}
-                    value={inputText}
-                    onChange={(e) => {
-                      setInputText(e.target.value);
-                    }}
-                    className="flex-1 min-w-0 bg-slate-900/60 border border-slate-800/80 text-white rounded-full px-4 py-2 text-sm focus:outline-none focus:border-teal-500 transition-all placeholder-slate-500 shadow-inner disabled:opacity-60 disabled:cursor-not-allowed"
-                  />
-                  
-                  {/* Actions Group - Mic & Send Button */}
-                  <div className="flex items-center gap-1.5 flex-shrink-0 pl-1 pr-1 sm:pr-0">
-                    {/* Mic / Voice Note */}
-                    <button 
-                      type="button"
-                      onClick={() => alert("🎤 Voice messaging feature is coming soon!")}
-                      className="w-9 h-9 rounded-full bg-slate-900/60 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
-                      title="Record Voice Note"
-                    >
-                      🎤
-                    </button>
-
-                    <button
-                      type="submit"
-                      className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2 rounded-full transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer w-9 h-9"
-                      title={editingMessage ? 'Save Message' : 'Send Message'}
-                    >
-                      <svg 
-                        className="w-4 h-4 transform rotate-45 -translate-x-0.5" 
-                        fill="none" 
-                        stroke="currentColor" 
-                        viewBox="0 0 24 24" 
-                        xmlns="http://www.w3.org/2000/svg"
-                      >
-                        <path 
-                          strokeLinecap="round" 
-                          strokeLinejoin="round" 
-                          strokeWidth="2.5" 
-                          d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                        ></path>
-                      </svg>
-                    </button>
                   </div>
-                </form>
+                )}
+
+                <div className="flex items-center gap-1.5 w-full px-2 py-2.5 sm:px-4 bg-[#0B111E] border-t border-slate-900/60 box-border">
+                  {/* Attachment Menu Popup */}
+                  <input 
+                    type="file" 
+                    ref={fileInputRef} 
+                    onChange={handleFileChange} 
+                    accept="image/*,.pdf,.doc,.docx,.txt,.mp4,.mp3,.webm" 
+                    className="hidden" 
+                  />
+                  <div className="relative flex items-center flex-shrink-0" ref={attachMenuRef}>
+                    <button 
+                      type="button" 
+                      onClick={() => setShowAttachMenu(!showAttachMenu)}
+                      disabled={isUploading}
+                      className={`w-9 h-9 rounded-full border flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs flex-shrink-0 ${
+                        isUploading ? "bg-teal-950/20 border-teal-500 text-teal-400 animate-pulse" : "bg-slate-900/60 border-slate-800"
+                      }`}
+                      title="Add Attachment"
+                    >
+                      {isUploading ? "⏳" : "📎"}
+                    </button>
+
+                    {/* Attachment Popover */}
+                    {showAttachMenu && (
+                      <div className="absolute bottom-14 left-0 z-50 w-44 bg-gray-950/95 border border-slate-800 rounded-2xl shadow-2xl p-1.5 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 flex flex-col gap-1 select-none">
+                        {/* Document / Media Upload Option */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAttachMenu(false);
+                            fileInputRef.current?.click();
+                          }}
+                          className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-slate-800/80 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center shrink-0">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                          </div>
+                          <span>Upload File</span>
+                        </button>
+
+                        {/* POLL BUTTON IN ATTACHMENT MENU */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAttachMenu(false);
+                            setShowPollModal(true);
+                          }}
+                          className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-gray-200 hover:bg-teal-500/20 hover:text-teal-300 rounded-xl transition-colors cursor-pointer text-left"
+                        >
+                          <div className="w-7 h-7 rounded-lg bg-teal-500/20 text-teal-400 flex items-center justify-center shrink-0">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                            </svg>
+                          </div>
+                          <span>Create Poll</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Emoji Trigger */}
+                  <div className="relative flex items-center flex-shrink-0">
+                    <motion.button
+                      whileHover={{ scale: 1.1 }}
+                      whileTap={{ scale: 0.9 }}
+                      type="button"
+                      onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                      className="w-9 h-9 bg-slate-900/60 border border-slate-800 rounded-full flex items-center justify-center hover:text-amber-400 transition-colors text-xs cursor-pointer"
+                      title="Select Emoji"
+                    >
+                      😀
+                    </motion.button>
+                    {showEmojiPicker && (
+                      <div className="absolute bottom-14 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
+                        <EmojiPicker 
+                          theme={Theme.DARK} 
+                          emojiStyle={EmojiStyle.GOOGLE}
+                          onEmojiClick={(emojiData) => {
+                            setInputText((prev) => prev + emojiData.emoji);
+                            setShowEmojiPicker(false);
+                          }}
+                          lazyLoadEmojis={true}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <form onSubmit={handleSendMessage} className="flex-1 flex gap-1.5 items-center min-w-0">
+                    <input
+                      type="text"
+                      placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type your message...")}
+                      disabled={isUploading}
+                      value={inputText}
+                      onChange={handleInputChange}
+                      className="flex-1 min-w-0 bg-slate-900/60 border border-slate-800/80 text-white rounded-full px-4 py-2 text-sm focus:outline-none focus:border-teal-500 transition-all placeholder-slate-500 shadow-inner disabled:opacity-60 disabled:cursor-not-allowed"
+                    />
+                    
+                    {/* Actions Group - Mic & Send Button */}
+                    <div className="flex items-center gap-1.5 flex-shrink-0 pl-1 pr-1 sm:pr-0">
+                      {/* Mic / Voice Note */}
+                      <button 
+                        type="button"
+                        onClick={() => alert("🎤 Voice messaging feature is coming soon!")}
+                        className="w-9 h-9 rounded-full bg-slate-900/60 border border-slate-800 flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer text-xs"
+                        title="Record Voice Note"
+                      >
+                        🎤
+                      </button>
+
+                      <button
+                        type="submit"
+                        className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2 rounded-full transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer w-9 h-9"
+                        title={editingMessage ? 'Save Message' : 'Send Message'}
+                      >
+                        <svg 
+                          className="w-4 h-4 transform rotate-45 -translate-x-0.5" 
+                          fill="none" 
+                          stroke="currentColor" 
+                          viewBox="0 0 24 24" 
+                        >
+                          <path 
+                            strokeLinecap="round" 
+                            strokeLinejoin="round" 
+                            strokeWidth="2.5" 
+                            d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                          ></path>
+                        </svg>
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
             );
           })()}
