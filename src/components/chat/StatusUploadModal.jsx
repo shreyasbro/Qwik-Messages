@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, limit } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import axios from 'axios';
+import { compressImageToHD } from '../../utils/imageOptimizer';
 
 export default function StatusUploadModal({ currentUser, onClose }) {
   const [tab, setTab] = useState('text'); // 'text' | 'image'
@@ -138,17 +139,36 @@ export default function StatusUploadModal({ currentUser, onClose }) {
       let finalContent = textContent.trim();
 
       if (tab === 'image' && imageFile) {
-        finalContent = await uploadToCloudinary(imageFile);
+        // Fast In-Browser Full HD WebP Compression
+        const optimizedFile = await compressImageToHD(imageFile, 1920, 0.85);
+        finalContent = await uploadToCloudinary(optimizedFile);
       }
+
+      const effectiveName = 
+        currentUser?.displayName || 
+        currentUser?.name || 
+        currentUser?.email?.split('@')[0] || 
+        'Anonymous';
+
+      const effectiveAvatar = 
+        currentUser?.photoURL || 
+        currentUser?.avatar || 
+        `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser?.uid}`;
 
       const expiresAtDate = new Date(Date.now() + storyDuration * 60 * 60 * 1000);
 
       const statusPayload = {
         userId: currentUser.uid,
-        userDisplayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'User',
-        userPhoto: currentUser.photoURL || '',
+        userEmail: currentUser.email || '',
+        userName: effectiveName,
+        userAvatar: effectiveAvatar,
+        userDisplayName: effectiveName,
+        userPhoto: effectiveAvatar,
         type: tab,
         content: finalContent,
+        text: tab === 'text' ? textContent.trim() : caption.trim(),
+        mediaUrl: tab === 'image' ? finalContent : '',
+        imageUrl: tab === 'image' ? finalContent : '',
         caption: tab === 'image' ? caption.trim() : '',
         bgColor: tab === 'text' ? bgColor : '',
         audience: audience,
@@ -173,12 +193,19 @@ export default function StatusUploadModal({ currentUser, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
-      <div className="bg-gray-900 border border-gray-800 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col relative max-h-[90vh]">
+    <div className="fixed inset-0 z-[250] bg-gray-950/95 backdrop-blur-3xl flex items-center justify-center p-3 sm:p-4 select-none animate-in fade-in duration-150">
+      {/* CLICK-AWAY CLOSE LAYER */}
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+
+      {/* STATUS CREATION CARD */}
+      <div 
+        onClick={(e) => e.stopPropagation()}
+        className="relative z-10 bg-gray-900 border border-gray-800 rounded-3xl w-full max-w-md overflow-hidden shadow-2xl shadow-black flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-150"
+      >
         {/* Header & Tabs (Fixed at Top - shrink-0) */}
-        <div className="p-4 pb-3 shrink-0 border-b border-slate-900 bg-slate-900/20">
+        <div className="p-4 pb-3 shrink-0 border-b border-gray-800 bg-gray-900/40">
           <div className="flex items-center justify-between mb-3.5">
-            <h3 className="text-white font-bold text-base">Create Status</h3>
+            <h3 className="text-white font-bold text-base tracking-wide">Create Status</h3>
             <button 
               onClick={onClose} 
               className="text-slate-400 hover:text-white cursor-pointer p-1 rounded-full hover:bg-slate-800/80 transition-colors"

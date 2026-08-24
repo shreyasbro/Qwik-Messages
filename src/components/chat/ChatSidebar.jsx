@@ -13,6 +13,9 @@ import CreateGroupModal from './CreateGroupModal';
 import StatusBar from './StatusBar';
 import StatusUploadModal from './StatusUploadModal';
 import StatusViewerModal from './StatusViewerModal';
+import WhatsAppStatusModal from './WhatsAppStatusModal';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '../../firebaseConfig';
 
 function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
   const isGroup = chat.isGroup || chat.type === 'group';
@@ -171,13 +174,38 @@ export default function ChatSidebar() {
   const [settingsView, setSettingsView] = useState("main"); // 'main' | 'privacy'
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [activeStatusView, setActiveStatusView] = useState(null);
-  const [statusSessionKey, setStatusSessionKey] = useState(0);
+  const [isStatusViewerOpen, setIsStatusViewerOpen] = useState(false);
+  const [statuses, setStatuses] = useState([]);
 
-  const handleOpenStatusViewer = (statuses) => {
-    if (!statuses || statuses.length === 0) return;
-    setActiveStatusView([...statuses]);
-    setStatusSessionKey(Date.now());
+  // Real-time status query
+  React.useEffect(() => {
+    if (!currentUser?.uid) return;
+    const now = new Date();
+    const q = query(
+      collection(db, "statuses"),
+      where("expiresAt", ">", now)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = [];
+      snapshot.forEach((docSnap) => {
+        const data = { id: docSnap.id, ...docSnap.data() };
+        const isOwner = data.userId === currentUser.uid;
+        const isPublic = !data.audience || data.audience === 'all';
+        const isPermittedCloseFriend = data.audience === 'close_friends' && data.allowedUsers?.includes(currentUser.uid);
+
+        if (isOwner || isPublic || isPermittedCloseFriend) {
+          list.push(data);
+        }
+      });
+      setStatuses(list);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser?.uid]);
+
+  const handleStatusButtonClick = () => {
+    setIsStatusViewerOpen(true);
   };
 
   const [comingSoonFeature, setComingSoonFeature] = useState(null);
@@ -228,6 +256,45 @@ export default function ChatSidebar() {
     setSettingsView("main");
   };
  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'unread' | 'groups'
+  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const filterDropdownRef = React.useRef(null);
+
+  // Close filter dropdown on outside click
+  React.useEffect(() => {
+    const handleOutsideFilterClick = (e) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target)) {
+        setShowFilterDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideFilterClick);
+    return () => document.removeEventListener("mousedown", handleOutsideFilterClick);
+  }, []);
+
+  // Extract known users map from active chats / users list for accurate profile resolution
+  const usersDirectory = useMemo(() => {
+    const map = {};
+    if (Array.isArray(chats)) {
+      chats.forEach((c) => {
+        if (c.participantsData) {
+          Object.entries(c.participantsData).forEach(([uid, data]) => {
+            if (uid && data) map[uid] = data;
+          });
+        }
+        if (c.user) {
+          const uid = c.user.uid || c.user.id;
+          if (uid) map[uid] = c.user;
+        }
+        if (c.recipient) {
+          const uid = c.recipient.uid || c.recipient.id;
+          if (uid) map[uid] = c.recipient;
+        }
+      });
+    }
+    return map;
+  }, [chats]);
+
   // Clean Deduplication Logic for 1-on-1 Chats in Sidebar, preserving Groups
   const deduplicatedChats = useMemo(() => {
     if (!Array.isArray(chats)) return [];
@@ -262,6 +329,38 @@ export default function ChatSidebar() {
  
     return [...groupRooms, ...Array.from(uniqueRooms.values())];
   }, [chats, currentUser]);
+
+  // Unread & Groups Computations
+  const unreadCount = useMemo(() => {
+    return deduplicatedChats.filter(c => (c.unreadCount || c.unreadCounts?.[currentUser?.uid] || 0) > 0).length;
+  }, [deduplicatedChats, currentUser?.uid]);
+
+  const groupsCount = useMemo(() => {
+    return deduplicatedChats.filter(c => c.isGroup || c.type === 'group').length;
+  }, [deduplicatedChats]);
+
+  // Filter conversation list based on search query and category filter
+  const displayChats = useMemo(() => {
+    return deduplicatedChats.filter((chat) => {
+      // 1. Search filter
+      if (searchQuery.trim()) {
+        const query = searchQuery.toLowerCase();
+        const chatName = (chat.isGroup ? chat.groupName : (chat.name || chat.displayName || ''))?.toLowerCase();
+        const lastMsg = (chat.lastMessage || '')?.toLowerCase();
+        if (!chatName.includes(query) && !lastMsg.includes(query)) return false;
+      }
+
+      // 2. Category Filter
+      if (activeFilter === 'unread') {
+        const unread = chat.unreadCount || chat.unreadCounts?.[currentUser?.uid] || 0;
+        return unread > 0;
+      }
+      if (activeFilter === 'groups') {
+        return chat.isGroup === true || chat.type === 'group';
+      }
+      return true;
+    });
+  }, [deduplicatedChats, searchQuery, activeFilter, currentUser?.uid]);
 
   const handleLogout = async () => {
     try {
@@ -396,29 +495,135 @@ export default function ChatSidebar() {
         </div>
       </div>
 
-      {/* StatusBar Mount */}
-      <StatusBar 
-        currentUser={currentUser} 
-        onOpenViewer={handleOpenStatusViewer} 
-        onOpenUpload={() => setShowUploadModal(true)} 
-      />
+      {/* 2. UNIFIED STATUS BUTTON + SEARCH BAR ROW */}
+      <div className="px-3 py-2 border-b border-gray-800/60 flex items-center gap-2 relative select-none" ref={filterDropdownRef}>
+        
+        {/* A. STATUS BUTTON (WITH GLOWING GRADIENT STORY RING) */}
+        <button
+          type="button"
+          onClick={handleStatusButtonClick}
+          className="group relative p-0.5 rounded-2xl bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500 shrink-0 hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer"
+          title="Status Updates"
+        >
+          <div className="p-1.5 rounded-[14px] bg-gray-950 flex items-center gap-1 text-teal-300">
+            <svg className="w-4 h-4 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-[11px] font-bold pr-1 hidden sm:inline">Status</span>
+          </div>
+          
+          {/* Pulsing Unread Story Badge */}
+          {statuses.length > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-teal-400 border-2 border-gray-950 animate-pulse" />
+          )}
+        </button>
 
-      {/* Chat Room Stream List */}
+        {/* B. SEARCH BAR WITH EMBEDDED FILTER ICON */}
+        <div className="flex-1 flex items-center gap-1.5 bg-gray-900/90 border border-gray-800 focus-within:border-teal-500/80 rounded-2xl px-3 py-1.5 transition-all">
+          <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+
+          <input
+            type="text"
+            placeholder="Search chats..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 bg-transparent border-none outline-none text-xs text-white placeholder-gray-500"
+          />
+
+          {/* Clear Search */}
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="text-gray-500 hover:text-white text-xs px-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          )}
+
+          {/* Filter Funnel Icon */}
+          <button
+            type="button"
+            onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+            className={`p-1 rounded-lg transition-all relative cursor-pointer ${
+              activeFilter !== 'all' ? 'text-teal-400 bg-teal-500/20' : 'text-gray-400 hover:text-white'
+            }`}
+            title="Filter chats"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+            </svg>
+
+            {/* Active Dot */}
+            {activeFilter !== 'all' && (
+              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 ring-2 ring-gray-950 animate-pulse" />
+            )}
+          </button>
+        </div>
+
+        {/* FILTER DROPDOWN MENU */}
+        {showFilterDropdown && (
+          <div className="absolute right-3 top-full mt-1.5 z-40 w-44 bg-gray-950/95 backdrop-blur-xl border border-gray-800 rounded-2xl p-1 shadow-2xl space-y-0.5 animate-in fade-in duration-100">
+            <button
+              type="button"
+              onClick={() => { setActiveFilter('all'); setShowFilterDropdown(false); }}
+              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
+                activeFilter === 'all' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <span>All Chats</span>
+              <span className="text-[10px] opacity-75">{deduplicatedChats.length}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveFilter('unread'); setShowFilterDropdown(false); }}
+              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
+                activeFilter === 'unread' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <span>Unread</span>
+              {unreadCount > 0 && (
+                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-rose-500 text-white">
+                  {unreadCount}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setActiveFilter('groups'); setShowFilterDropdown(false); }}
+              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
+                activeFilter === 'groups' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              <span>Groups</span>
+              <span className="text-[10px] opacity-75">{groupsCount}</span>
+            </button>
+          </div>
+        )}
+
+      </div>
+
+      {/* 3. CONVERSATION LIST */}
       <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1">
         {chatsLoading ? (
           <p className="text-center text-slate-300 text-xs py-8">Updating chats stream...</p>
-        ) : deduplicatedChats.length === 0 ? (
-          <div className="text-center py-12 px-4">
-            <p className="text-slate-400 text-sm font-medium">No chats started yet.</p>
+        ) : displayChats.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-48 text-center px-4 text-gray-500 select-none">
+            <div className="w-10 h-10 rounded-2xl bg-gray-900/80 border border-gray-800 flex items-center justify-center mb-2 text-gray-400 text-lg">
+              💬
+            </div>
+            <p className="text-xs font-semibold text-gray-400">No conversations found</p>
             <button
               onClick={() => setIsSearchOpen(true)}
-              className="mt-3 text-xs font-black uppercase tracking-wider text-emerald-400 hover:text-emerald-300 transition-colors"
+              className="mt-3 text-xs font-black uppercase tracking-wider text-teal-400 hover:text-teal-300 transition-colors cursor-pointer"
             >
               Start Your First Conversation
             </button>
           </div>
         ) : (
-          deduplicatedChats.map((c) => (
+          displayChats.map((c) => (
             <ChatListItem
               key={c.id || c.chatId || c.roomId || Math.random().toString()}
               chat={c}
@@ -453,15 +658,15 @@ export default function ChatSidebar() {
         />
       )}
 
-      {/* Status Viewer Modal */}
-      {activeStatusView && (
-        <StatusViewerModal 
-          key={statusSessionKey}
-          statuses={activeStatusView} 
-          currentUser={currentUser}
-          onClose={() => setActiveStatusView(null)} 
-        />
-      )}
+      {/* 1:1 WhatsApp Web Status Viewer Modal */}
+      <WhatsAppStatusModal 
+        isOpen={isStatusViewerOpen} 
+        onClose={() => setIsStatusViewerOpen(false)} 
+        currentUser={currentUser}
+        statuses={statuses}
+        usersDirectory={usersDirectory}
+        onAddStatus={() => setShowUploadModal(true)}
+      />
 
       {/* ⚙️ WHATSAPP-STYLE SETTINGS DRAWER (Slides in from left) */}
       {isSettingsOpen && (

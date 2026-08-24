@@ -107,3 +107,86 @@ html, body, #root {
 @utility animate-toast-slide-in {
   animation: slideInUpToast 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* CINEMATIC CIRCULAR EXPAND FROM STATUS BUTTON */
+@keyframes statusCircleExpand {
+  0% {
+    clip-path: circle(16px at 48px 80px);
+    opacity: 0.2;
+    transform: scale(0.98);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    clip-path: circle(160% at 48px 80px);
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* CINEMATIC CIRCULAR REVERSE COLLAPSE BACK INTO STATUS BUTTON */
+@keyframes statusCircleCollapse {
+  0% {
+    clip-path: circle(160% at 48px 80px);
+    opacity: 1;
+    transform: scale(1);
+  }
+  65% {
+    opacity: 1;
+  }
+  100% {
+    clip-path: circle(16px at 48px 80px);
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+/* SMOOTH CONTENT FADE */
+@keyframes statusContentIn {
+  0% { opacity: 0; transform: translateY(8px); }
+  60% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes statusContentOut {
+  0% { opacity: 1; transform: translateY(0); }
+  35% { opacity: 0; transform: translateY(6px); }
+  100% { opacity: 0; }
+}
+
+.animate-status-circle-in {
+  animation: statusCircleExpand 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: clip-path, transform, opacity;
+}
+
+.animate-status-circle-out {
+  animation: statusCircleCollapse 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: clip-path, transform, opacity;
+}
+
+.animate-status-pane-in {
+  animation: statusContentIn 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-status-pane-out {
+  animation: statusContentOut 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-status-expand {
+  animation: statusCircleExpand 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: clip-path, transform, opacity;
+}
+
+.animate-status-collapse {
+  animation: statusCircleCollapse 0.8s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: clip-path, transform, opacity;
+}
+
+.animate-status-content-in {
+  animation: statusContentIn 0.85s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-status-content-out {
+  animation: statusContentOut 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
