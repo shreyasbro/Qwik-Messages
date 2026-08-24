@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { auth, db } from '../../firebaseConfig';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import AudioMessageBubble from './AudioMessageBubble';
+import VoiceMessagePlayer from './VoiceMessagePlayer';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { getCachedDocument, saveCachedDocument } from '../../utils/documentStorage';
 
@@ -773,14 +774,13 @@ export default function MessageBubble({
                   </div>
 
                 </div>
-              ) : message.mediaUrl.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl.includes("/audio/") || message.text?.endsWith(".mp3") ? (
-                <AudioMessageBubble 
-                  message={message}
+              ) : message.type === 'audio' || message.mediaUrl.match(/\.(mp3|wav|ogg|aac|m4a|webm)$/i) || message.mediaUrl.includes("/audio/") || message.mediaUrl.includes("/video/upload") || message.text?.endsWith(".mp3") ? (
+                <VoiceMessagePlayer 
+                  audioUrl={message.mediaUrl}
+                  duration={message.duration}
                   isMe={isMe}
-                  resolvedPhotoUrl={resolvedPhotoUrl}
-                  senderDisplayName={senderDisplayName}
                 />
-              ) : message.mediaUrl.match(/\.(mp4|webm)$/i) || message.mediaUrl.includes("/video/") ? (
+              ) : message.mediaUrl.match(/\.(mp4|mov)$/i) || message.mediaUrl.includes("/video/") ? (
                 <video 
                   controls 
                   preload="metadata"

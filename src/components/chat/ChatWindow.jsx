@@ -19,6 +19,7 @@ import UserSearchModal from './UserSearchModal';
 import AddToGroupModal from './AddToGroupModal';
 import CreatePollModal from './CreatePollModal';
 import GiphyPicker from './GiphyPicker';
+import VoiceRecorderBar from './VoiceRecorderBar';
 import ChatToast from '../ChatToast';
 
 export default function ChatWindow() {
@@ -36,6 +37,7 @@ export default function ChatWindow() {
   const [selectedMessageIds, setSelectedMessageIds] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [showGifStickerPicker, setShowGifStickerPicker] = useState(false);
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
   const [pinnedMessage, setPinnedMessage] = useState(null);
@@ -45,6 +47,52 @@ export default function ChatWindow() {
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
   const lastTypingHeartbeatRef = useRef(0);
   const toastTimeoutRef = useRef(null);
+
+  // Send Recorded Voice Note
+  const handleSendVoiceNote = async (audioBlob, durationSec) => {
+    setIsRecordingVoice(false);
+    const targetRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+    if (!targetRoomId || !currentUser?.uid) return;
+
+    showToast('Uploading voice note...');
+    try {
+      const audioFile = new File([audioBlob], `voice_note_${Date.now()}.webm`, { type: 'audio/webm' });
+      const uploadRes = await uploadMediaDirect(audioFile);
+      const audioUrl = uploadRes.secure_url;
+
+      const messagesRef = collection(db, 'chats', targetRoomId, 'messages');
+      const senderId = currentUser.uid;
+      const senderName = currentUserProfile?.displayName || currentUser.displayName || 'User';
+
+      await addDoc(messagesRef, {
+        senderId: senderId,
+        senderName: senderName,
+        type: 'audio',
+        messageType: 'media',
+        mediaUrl: audioUrl,
+        duration: durationSec,
+        text: '🎤 Voice message',
+        createdAt: serverTimestamp(),
+        readBy: [senderId],
+        reactions: {},
+        starredBy: []
+      });
+
+      const roomRef = doc(db, 'chats', targetRoomId);
+      await setDoc(roomRef, {
+        id: targetRoomId,
+        lastMessage: '🎤 Voice message',
+        updatedAt: serverTimestamp(),
+        participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
+      }, { merge: true });
+
+      showToast('Voice note sent!');
+      await clearTypingImmediately();
+    } catch (err) {
+      console.error('Failed to send voice note:', err);
+      showToast('Failed to send voice note');
+    }
+  };
 
   // Send GIF or Custom Sticker
   const handleSendGifOrSticker = async ({ url, type }) => {
@@ -1445,114 +1493,121 @@ export default function ChatWindow() {
                     )}
                   </div>
 
-                  <form onSubmit={handleSendMessage} className="flex-1 flex gap-2 items-center min-w-0">
-                    {/* UNIFIED INPUT CAPSULE (WITH EMBEDDED EMOJI & GIF ICONS) */}
-                    <div className="flex-1 relative flex items-center bg-gray-900/90 hover:bg-gray-900 border border-gray-800 focus-within:border-teal-500/80 rounded-2xl px-2.5 py-1 transition-all shadow-inner min-w-0">
-                      
-                      {/* 1. EMOJI PICKER ICON */}
-                      <div className="relative flex items-center shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowEmojiPicker(!showEmojiPicker);
-                            setShowGifStickerPicker(false);
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-amber-400 transition-colors shrink-0 cursor-pointer"
-                          title="Emojis"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </button>
-                        {showEmojiPicker && (
-                          <div className="absolute bottom-12 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
-                            <EmojiPicker 
-                              lazyLoadEmojis={true} 
-                              onEmojiClick={(emojiData) => {
-                                setInputText((prev) => prev + emojiData.emoji);
-                                setShowEmojiPicker(false);
-                              }}
-                              searchPlaceHolder="Search emojis..." 
-                              theme={Theme.DARK}
-                              emojiStyle={EmojiStyle.NATIVE}
-                              width={300}
-                              height={400}
-                            />
-                          </div>
+                  {isRecordingVoice ? (
+                    <VoiceRecorderBar 
+                      onCancel={() => setIsRecordingVoice(false)}
+                      onSendAudio={handleSendVoiceNote}
+                    />
+                  ) : (
+                    <form onSubmit={handleSendMessage} className="flex-1 flex gap-2 items-center min-w-0">
+                      {/* UNIFIED INPUT CAPSULE (WITH EMBEDDED EMOJI & GIF ICONS) */}
+                      <div className="flex-1 relative flex items-center bg-gray-900/90 hover:bg-gray-900 border border-gray-800 focus-within:border-teal-500/80 rounded-2xl px-2.5 py-1 transition-all shadow-inner min-w-0">
+                        
+                        {/* 1. EMOJI PICKER ICON */}
+                        <div className="relative flex items-center shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowEmojiPicker(!showEmojiPicker);
+                              setShowGifStickerPicker(false);
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-amber-400 transition-colors shrink-0 cursor-pointer"
+                            title="Emojis"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                          </button>
+                          {showEmojiPicker && (
+                            <div className="absolute bottom-12 left-0 z-50 shadow-2xl rounded-3xl overflow-hidden border border-slate-800">
+                              <EmojiPicker 
+                                lazyLoadEmojis={true} 
+                                onEmojiClick={(emojiData) => {
+                                  setInputText((prev) => prev + emojiData.emoji);
+                                  setShowEmojiPicker(false);
+                                }}
+                                searchPlaceHolder="Search emojis..." 
+                                theme={Theme.DARK}
+                                emojiStyle={EmojiStyle.NATIVE}
+                                width={300}
+                                height={400}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 2. TEXT INPUT FIELD */}
+                        <input
+                          type="text"
+                          placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type a message...")}
+                          disabled={isUploading}
+                          value={inputText}
+                          onChange={handleInputChange}
+                          className="flex-1 min-w-0 bg-transparent border-none outline-none text-sm text-white placeholder-gray-500 px-2 py-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                        />
+
+                        {/* 3. EMBEDDED GIPHY (GIF) BUTTON (FLUSH INSIDE INPUT CAPSULE) */}
+                        <div className="relative flex items-center shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowGifStickerPicker(!showGifStickerPicker);
+                              setShowEmojiPicker(false);
+                            }}
+                            className={`px-2 py-0.5 rounded-lg text-[11px] font-black tracking-wider uppercase shrink-0 transition-all cursor-pointer ${
+                              showGifStickerPicker
+                                ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-sm scale-95'
+                                : 'bg-gray-800/80 text-gray-300 hover:text-white hover:bg-gray-700'
+                            }`}
+                            title="GIPHY GIFs & Stickers"
+                          >
+                            GIF
+                          </button>
+                          <GiphyPicker 
+                            isOpen={showGifStickerPicker} 
+                            onClose={() => setShowGifStickerPicker(false)}
+                            onSelectMedia={handleSendGifOrSticker}
+                          />
+                        </div>
+
+                      </div>
+
+                      {/* Actions Group - Voice Note & Send Button */}
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {inputText.trim() || editingMessage ? (
+                          <button
+                            type="submit"
+                            className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2.5 rounded-2xl transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer shrink-0"
+                            title={editingMessage ? 'Save Message' : 'Send Message'}
+                          >
+                            <svg 
+                              className="w-4 h-4 transform rotate-45 -translate-x-0.5 stroke-[2.5]" 
+                              fill="none" 
+                              stroke="currentColor" 
+                              viewBox="0 0 24 24" 
+                            >
+                              <path 
+                                strokeLinecap="round" 
+                                strokeLinejoin="round" 
+                                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                              />
+                            </svg>
+                          </button>
+                        ) : (
+                          <button 
+                            type="button"
+                            onClick={() => setIsRecordingVoice(true)}
+                            className="p-2.5 rounded-2xl bg-gray-900/90 hover:bg-gray-800 border border-gray-800 flex items-center justify-center text-gray-400 hover:text-teal-400 transition-colors cursor-pointer shrink-0"
+                            title="Record Voice Note"
+                          >
+                            <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                            </svg>
+                          </button>
                         )}
                       </div>
-
-                      {/* 2. TEXT INPUT FIELD */}
-                      <input
-                        type="text"
-                        placeholder={isUploading ? "Uploading file..." : (editingMessage ? "Edit your message..." : "Type a message...")}
-                        disabled={isUploading}
-                        value={inputText}
-                        onChange={handleInputChange}
-                        className="flex-1 min-w-0 bg-transparent border-none outline-none text-sm text-white placeholder-gray-500 px-2 py-1 disabled:opacity-60 disabled:cursor-not-allowed"
-                      />
-
-                      {/* 3. EMBEDDED GIPHY (GIF) BUTTON (FLUSH INSIDE INPUT CAPSULE) */}
-                      <div className="relative flex items-center shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowGifStickerPicker(!showGifStickerPicker);
-                            setShowEmojiPicker(false);
-                          }}
-                          className={`px-2 py-0.5 rounded-lg text-[11px] font-black tracking-wider uppercase shrink-0 transition-all cursor-pointer ${
-                            showGifStickerPicker
-                              ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white shadow-sm scale-95'
-                              : 'bg-gray-800/80 text-gray-300 hover:text-white hover:bg-gray-700'
-                          }`}
-                          title="GIPHY GIFs & Stickers"
-                        >
-                          GIF
-                        </button>
-                        <GiphyPicker 
-                          isOpen={showGifStickerPicker} 
-                          onClose={() => setShowGifStickerPicker(false)}
-                          onSelectMedia={handleSendGifOrSticker}
-                        />
-                      </div>
-
-                    </div>
-
-                    {/* Actions Group - Voice Note & Send Button */}
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {inputText.trim() || editingMessage ? (
-                        <button
-                          type="submit"
-                          className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2.5 rounded-2xl transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer shrink-0"
-                          title={editingMessage ? 'Save Message' : 'Send Message'}
-                        >
-                          <svg 
-                            className="w-4 h-4 transform rotate-45 -translate-x-0.5 stroke-[2.5]" 
-                            fill="none" 
-                            stroke="currentColor" 
-                            viewBox="0 0 24 24" 
-                          >
-                            <path 
-                              strokeLinecap="round" 
-                              strokeLinejoin="round" 
-                              d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                            />
-                          </svg>
-                        </button>
-                      ) : (
-                        <button 
-                          type="button"
-                          onClick={() => alert("🎤 Voice messaging feature is coming soon!")}
-                          className="p-2.5 rounded-2xl bg-gray-900/90 hover:bg-gray-800 border border-gray-800 flex items-center justify-center text-gray-400 hover:text-teal-400 transition-colors cursor-pointer shrink-0"
-                          title="Record Voice Note"
-                        >
-                          <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  </form>
+                    </form>
+                  )}
                 </div>
               </div>
             );
