@@ -572,13 +572,13 @@ export default function MessageBubble({
           {/* Bubble Container - relative context */}
           <div 
             className={`relative rounded-3xl shadow-md text-sm transition-all h-auto min-h-0 flex flex-col box-border shrink-0 break-words [word-break:break-word] ${
-              message.type === 'poll'
+              message.type === 'poll' || message.type === 'sticker'
                 ? 'w-full !p-0 bg-transparent border-0 shadow-none'
                 : message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
                 ? 'w-full p-2'
                 : 'px-4 py-2.5 w-fit min-w-[110px]'
             } ${
-              message.type === 'poll'
+              message.type === 'poll' || message.type === 'sticker'
                 ? ''
                 : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
                 ? 'max-w-[95%] bg-transparent border-0 shadow-none !p-0'
@@ -789,6 +789,26 @@ export default function MessageBubble({
                   <source src={message.mediaUrl} />
                   Your browser does not support the video tag.
                 </video>
+              ) : message.type === 'sticker' ? (
+                /* GIPHY STICKER (NO BACKGROUND BUBBLE) */
+                <div className="w-36 h-36 select-none p-1 flex items-center justify-center">
+                  <img
+                    src={message.mediaUrl}
+                    alt="sticker"
+                    className="w-full h-full object-contain filter drop-shadow-lg hover:scale-105 transition-transform"
+                    loading="lazy"
+                  />
+                </div>
+              ) : message.type === 'gif' ? (
+                /* GIPHY GIF */
+                <div className="rounded-2xl overflow-hidden max-w-xs shadow-xl border border-white/10 bg-black/40">
+                  <img
+                    src={message.mediaUrl}
+                    alt="gif"
+                    className="w-full h-full object-cover max-h-64 hover:scale-[1.01] transition-transform"
+                    loading="lazy"
+                  />
+                </div>
               ) : (
                 <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer">
                   <img 
@@ -802,8 +822,8 @@ export default function MessageBubble({
             </div>
           ) : null}
 
-          {/* TEXT CAPTION / FALLBACK */}
-          {messageText && !messageText.startsWith("📎 Sent a file:") && (
+          {/* TEXT CAPTION / FALLBACK (Skip for Stickers & GIFs) */}
+          {messageText && message.type !== 'sticker' && message.type !== 'gif' && !messageText.startsWith("📎 Sent a file:") && (
             <p className="leading-relaxed font-sans text-inherit pr-2 [word-break:break-word] break-words break-all whitespace-pre-wrap m-0 p-0 block w-full">
               {messageText}
             </p>
