@@ -498,23 +498,28 @@ export default function ChatSidebar() {
       {/* 2. UNIFIED STATUS BUTTON + SEARCH BAR ROW */}
       <div className="px-3 py-2 border-b border-gray-800/60 flex items-center gap-2 relative select-none" ref={filterDropdownRef}>
         
-        {/* A. STATUS BUTTON (WITH GLOWING GRADIENT STORY RING) */}
+        {/* A. STATUS BUTTON (ALWAYS SHOWS ICON + "STATUS" TEXT ON MOBILE & DESKTOP) */}
         <button
           type="button"
           onClick={handleStatusButtonClick}
           className="group relative p-0.5 rounded-2xl bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500 shrink-0 hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer"
           title="Status Updates"
         >
-          <div className="p-1.5 rounded-[14px] bg-gray-950 flex items-center gap-1 text-teal-300">
-            <svg className="w-4 h-4 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="px-2.5 py-1.5 rounded-[14px] bg-gray-950 flex items-center gap-1.5 text-teal-300">
+            {/* Status Icon */}
+            <svg className="w-4 h-4 stroke-[2.2] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="text-[11px] font-bold pr-1 hidden sm:inline">Status</span>
+            
+            {/* Always Visible "Status" Label */}
+            <span className="text-xs font-bold tracking-tight inline-block select-none">
+              Status
+            </span>
           </div>
           
-          {/* Pulsing Unread Story Badge */}
+          {/* Notification Dot */}
           {statuses.length > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-teal-400 border-2 border-gray-950 animate-pulse" />
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 border border-gray-950 animate-pulse" />
           )}
         </button>
 

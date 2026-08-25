@@ -35,7 +35,7 @@ export default function WhatsAppStatusModal({
   // Group statuses by user
   const userMap = {};
   (statuses || []).forEach((st) => {
-    const uid = st.userId;
+    const uid = st.userId || st.uid;
     if (!uid) return;
     const contactProfile = usersDirectory[uid] || {};
 
@@ -95,6 +95,7 @@ export default function WhatsAppStatusModal({
     }
   }, [isOpen]);
 
+  // Story Progress Timer
   useEffect(() => {
     if (!isOpen || isClosing || !currentStory || isPaused) return;
 
@@ -168,10 +169,19 @@ export default function WhatsAppStatusModal({
     }
   };
 
+  const handleOpenUserStory = (uid) => {
+    setProgress(0);
+    setSelectedUserUid(uid);
+    setCurrentStoryIndex(0);
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') handleAnimatedClose();
+      if (e.key === 'Escape') {
+        if (selectedUserUid) setSelectedUserUid(null);
+        else handleAnimatedClose();
+      }
       if (e.key === 'ArrowRight') handleNextStory();
       if (e.key === 'ArrowLeft') handlePrevStory();
       if (e.key === ' ') setIsPaused((p) => !p);
@@ -188,9 +198,11 @@ export default function WhatsAppStatusModal({
         isClosing ? 'animate-status-circle-out' : 'animate-status-circle-in'
       }`}
     >
-      {/* 1. LEFT SIDEBAR (QWIK MESSAGES THEMED) */}
+      {/* 1. STATUS FEED LIST (VISIBLE ON MOBILE ONLY WHEN NO STORY IS OPEN) */}
       <div
-        className={`w-full md:w-[380px] lg:w-[420px] h-full bg-gray-950 border-r border-gray-800/80 flex flex-col shrink-0 z-20 ${
+        className={`${
+          selectedUserUid ? 'hidden md:flex' : 'flex'
+        } w-full md:w-[380px] lg:w-[420px] h-full bg-gray-950 border-r border-gray-800/80 flex-col shrink-0 z-20 ${
           isClosing ? 'animate-status-pane-out' : 'animate-status-pane-in'
         }`}
       >
@@ -225,10 +237,9 @@ export default function WhatsAppStatusModal({
           </button>
         </div>
 
-        {/* Status Lists */}
+        {/* Status Feed List */}
         <div className="flex-1 overflow-y-auto p-3.5 space-y-4 custom-scrollbar">
-          
-          {/* A. MY STATUS */}
+          {/* MY STATUS */}
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-gray-500 px-2 block mb-2">
               My Status
@@ -236,9 +247,7 @@ export default function WhatsAppStatusModal({
             <div
               onClick={() => {
                 if (myStatusGroup) {
-                  setSelectedUserUid(myUid);
-                  setCurrentStoryIndex(0);
-                  setProgress(0);
+                  handleOpenUserStory(myUid);
                 } else {
                   onAddStatus();
                 }
@@ -279,7 +288,7 @@ export default function WhatsAppStatusModal({
             </div>
           </div>
 
-          {/* B. RECENT UPDATES */}
+          {/* RECENT UPDATES */}
           <div>
             <span className="text-[10px] font-extrabold uppercase tracking-wider text-gray-500 px-2 block mb-2">
               Recent Updates ({contactGroups.length})
@@ -287,39 +296,28 @@ export default function WhatsAppStatusModal({
 
             {contactGroups.length > 0 ? (
               <div className="space-y-1.5">
-                {contactGroups.map((contact) => {
-                  const isSelected = selectedUserUid === contact.userId;
-                  return (
-                    <div
-                      key={contact.userId}
-                      onClick={() => {
-                        setSelectedUserUid(contact.userId);
-                        setCurrentStoryIndex(0);
-                        setProgress(0);
-                      }}
-                      className={`flex items-center gap-3.5 p-3 rounded-2xl cursor-pointer border transition-all ${
-                        isSelected
-                          ? 'bg-teal-500/10 border-teal-500/40 shadow-lg shadow-teal-500/5'
-                          : 'bg-gray-900/30 hover:bg-gray-900/70 border-gray-800/60 hover:border-gray-700'
-                      }`}
-                    >
-                      <div className="w-12 h-12 rounded-full p-[2px] bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500 flex items-center justify-center shrink-0">
-                        <img
-                          src={contact.userAvatar}
-                          alt={contact.userName}
-                          className="w-full h-full rounded-full object-cover border-2 border-gray-950"
-                        />
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <h4 className="text-xs font-bold text-gray-200 truncate">{contact.userName}</h4>
-                        <p className="text-[11px] text-teal-400/80 truncate mt-0.5">
-                          {contact.stories.length} new update{contact.stories.length > 1 ? 's' : ''}
-                        </p>
-                      </div>
+                {contactGroups.map((contact) => (
+                  <div
+                    key={contact.userId}
+                    onClick={() => handleOpenUserStory(contact.userId)}
+                    className="flex items-center gap-3.5 p-3 rounded-2xl cursor-pointer border border-gray-800/60 bg-gray-900/30 hover:bg-gray-900/70 hover:border-gray-700 transition-all"
+                  >
+                    <div className="w-12 h-12 rounded-full p-[2px] bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500 flex items-center justify-center shrink-0">
+                      <img
+                        src={contact.userAvatar}
+                        alt={contact.userName}
+                        className="w-full h-full rounded-full object-cover border-2 border-gray-950"
+                      />
                     </div>
-                  );
-                })}
+
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-bold text-gray-200 truncate">{contact.userName}</h4>
+                      <p className="text-[11px] text-teal-400/80 truncate mt-0.5">
+                        {contact.stories.length} new update{contact.stories.length > 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="text-center py-12 text-gray-600 text-xs">
@@ -327,19 +325,20 @@ export default function WhatsAppStatusModal({
               </div>
             )}
           </div>
-
         </div>
       </div>
 
-      {/* 2. RIGHT VIEWER / EMPTY STATE */}
+      {/* 2. FULL-SCREEN STORY VIEWER (MOBILE EXPANDED & DESKTOP SPLIT) */}
       <div
-        className={`flex-1 h-full bg-gray-950/95 relative flex items-center justify-center overflow-hidden p-4 ${
+        className={`${
+          selectedUserUid ? 'flex' : 'hidden md:flex'
+        } flex-1 h-full bg-gray-950/95 relative items-center justify-center overflow-hidden p-2 sm:p-4 ${
           isClosing ? 'animate-status-pane-out' : 'animate-status-pane-in'
         }`}
       >
         {currentStory ? (
           <div
-            className="w-full max-w-[440px] h-full max-h-[90vh] bg-gray-900/90 rounded-3xl overflow-hidden shadow-2xl shadow-black/80 flex flex-col justify-between relative border border-gray-800/90"
+            className="w-full max-w-[440px] h-full max-h-[96vh] md:max-h-[90vh] bg-gray-900 rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between relative border border-gray-800"
             onMouseDown={() => setIsPaused(true)}
             onMouseUp={() => setIsPaused(false)}
             onTouchStart={() => setIsPaused(true)}
@@ -364,16 +363,27 @@ export default function WhatsAppStatusModal({
               ))}
             </div>
 
-            {/* Story Header */}
+            {/* Header: User Profile & Actions */}
             <div className="absolute top-6 inset-x-3 z-40 flex items-center justify-between p-2.5 bg-gradient-to-b from-gray-950/90 via-gray-950/50 to-transparent rounded-t-2xl text-white">
               <div className="flex items-center gap-2.5">
+                {/* Mobile Back to List Arrow */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedUserUid(null)}
+                  className="md:hidden p-1.5 rounded-full bg-black/40 text-white cursor-pointer"
+                >
+                  <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+
                 <img
                   src={activeGroup?.userAvatar}
                   alt=""
                   className="w-9 h-9 rounded-full object-cover border-2 border-teal-400 shadow-md"
                 />
                 <div>
-                  <h4 className="text-xs font-bold truncate max-w-[150px]">
+                  <h4 className="text-xs font-bold truncate max-w-[140px]">
                     {activeGroup?.userName}
                   </h4>
                   <span className="text-[10px] text-gray-400 opacity-90">
@@ -413,7 +423,7 @@ export default function WhatsAppStatusModal({
                   type="button"
                   onClick={() => setSelectedUserUid(null)}
                   className="p-1.5 rounded-xl hover:bg-white/15 text-gray-400 hover:text-white transition-colors cursor-pointer"
-                  title="Close viewer"
+                  title="Close story"
                 >
                   <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -477,7 +487,6 @@ export default function WhatsAppStatusModal({
             )}
           </div>
         ) : (
-          /* Qwik Messages Themed Empty Placeholder */
           <div className="flex flex-col items-center justify-center text-center p-8 select-none animate-in fade-in duration-200">
             <div className="w-16 h-16 rounded-3xl bg-gray-900 border border-teal-500/20 flex items-center justify-center text-teal-400 mb-4 shadow-xl shadow-teal-500/5">
               <svg className="w-8 h-8 stroke-[1.8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
