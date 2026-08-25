@@ -17,6 +17,143 @@ import WhatsAppStatusModal from './WhatsAppStatusModal';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 
+// 1. KEYWORD HIGHLIGHTER HELPER
+export const HighlightText = ({ text = '', highlight = '' }) => {
+  if (!highlight.trim() || !text) return <span>{text}</span>;
+  
+  const regex = new RegExp(`(${highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const parts = String(text).split(regex);
+
+  return (
+    <span>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <span key={i} className="text-teal-400 font-extrabold underline decoration-teal-500/50 bg-teal-500/10 px-0.5 rounded">
+            {part}
+          </span>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  );
+};
+
+// 2. COMPREHENSIVE PARTICIPANT & CHAT TITLE RESOLVER
+export const resolveChatDetails = (chat, currentUid, usersList = []) => {
+  if (!chat) return { title: 'Unknown', email: '', username: '', isGroup: false, avatar: '' };
+
+  // Case A: Group Chat
+  if (chat.isGroup || chat.type === 'group') {
+    const grpTitle = chat.groupName || chat.name || 'Group Chat';
+    const groupDesc = chat.groupDescription || chat.description || '';
+    return {
+      title: grpTitle,
+      email: '',
+      username: groupDesc,
+      groupDescription: groupDesc,
+      avatar: chat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(grpTitle)}&background=0d9488&color=fff&bold=true`,
+      isGroup: true,
+    };
+  }
+
+  // Case B: Direct Chat - Find the other user's UID
+  let otherUid = null;
+  if (Array.isArray(chat.participants)) {
+    otherUid = chat.participants.find((uid) => uid !== currentUid);
+  } else if (chat.participantIds) {
+    otherUid = chat.participantIds.find((uid) => uid !== currentUid);
+  }
+
+  // Check global users directory / allUsers list
+  if (otherUid && Array.isArray(usersList) && usersList.length > 0) {
+    const foundUser = usersList.find((u) => (u.uid || u.id) === otherUid);
+    if (foundUser) {
+      const emailName = foundUser.email ? foundUser.email.split('@')[0] : 'User';
+      const displayName = foundUser.displayName || foundUser.name || emailName;
+      const username = foundUser.userName || foundUser.username || emailName || '';
+      const avatar = userService.resolveAvatar({
+        customAvatarUrl: foundUser.customAvatarUrl,
+        photoURL: foundUser.photoURL,
+        avatar: foundUser.avatar,
+        displayName
+      });
+      return {
+        title: displayName,
+        email: foundUser.email || '',
+        username,
+        avatar,
+        isGroup: false,
+      };
+    }
+  }
+
+  // Check participantsData embedded map
+  if (chat.participantsData) {
+    const targetUid = otherUid || Object.keys(chat.participantsData).find((uid) => uid !== currentUid);
+    if (targetUid && chat.participantsData[targetUid]) {
+      const data = chat.participantsData[targetUid];
+      const emailName = data.email ? data.email.split('@')[0] : 'User';
+      const displayName = data.displayName || data.name || emailName;
+      const username = data.userName || data.username || emailName || '';
+      const avatar = userService.resolveAvatar({
+        customAvatarUrl: data.customAvatarUrl,
+        photoURL: data.photoURL,
+        avatar: data.avatar,
+        displayName
+      });
+      return {
+        title: displayName,
+        email: data.email || '',
+        username,
+        avatar,
+        isGroup: false,
+      };
+    }
+  }
+
+  // Check direct recipient / user object if attached
+  const otherObj = chat.recipient || chat.otherUser || chat.user;
+  if (otherObj) {
+    const emailName = otherObj.email ? otherObj.email.split('@')[0] : 'User';
+    const displayName = otherObj.displayName || otherObj.name || emailName;
+    const username = otherObj.userName || otherObj.username || emailName || '';
+    const avatar = userService.resolveAvatar({
+      customAvatarUrl: otherObj.customAvatarUrl,
+      photoURL: otherObj.photoURL,
+      avatar: otherObj.avatar,
+      displayName
+    });
+    return {
+      title: displayName,
+      email: otherObj.email || '',
+      username,
+      avatar,
+      isGroup: false,
+    };
+  }
+
+  // Generic fallback using chat title or email
+  const rawTitle = chat.displayName || chat.name || chat.otherUserName;
+  const fallbackTitle = rawTitle && rawTitle !== 'Direct Message' ? rawTitle : (chat.email ? chat.email.split('@')[0] : 'User');
+  const fallbackEmail = chat.email || '';
+  const fallbackUsername = chat.userName || chat.username || (fallbackEmail ? fallbackEmail.split('@')[0] : '');
+  const avatar = userService.resolveAvatar({
+    photoURL: chat.photoURL,
+    displayName: fallbackTitle
+  });
+
+  return {
+    title: fallbackTitle,
+    email: fallbackEmail,
+    username: fallbackUsername,
+    avatar,
+    isGroup: false,
+  };
+};
+
+export const getChatDisplayInfo = resolveChatDetails;
+
 function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
   const isGroup = chat.isGroup || chat.type === 'group';
   const { recipient } = useRecipient(isGroup ? [] : chat.participants, currentUser?.uid);
@@ -176,6 +313,24 @@ export default function ChatSidebar() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [isStatusViewerOpen, setIsStatusViewerOpen] = useState(false);
   const [statuses, setStatuses] = useState([]);
+  const [allUsersList, setAllUsersList] = useState([]);
+
+  // Real-time directory of all registered users (for instant 1-on-1 name & Google avatar resolution)
+  React.useEffect(() => {
+    if (!currentUser?.uid) return;
+    const usersRef = collection(db, 'users');
+    const unsubUsers = onSnapshot(usersRef, (snapshot) => {
+      const uList = [];
+      snapshot.forEach((docSnap) => {
+        uList.push({ uid: docSnap.id, id: docSnap.id, ...docSnap.data() });
+      });
+      setAllUsersList(uList);
+    }, (err) => {
+      console.error("Error subscribing to users directory:", err);
+    });
+
+    return () => unsubUsers();
+  }, [currentUser?.uid]);
 
   // Real-time status query
   React.useEffect(() => {
@@ -258,18 +413,18 @@ export default function ChatSidebar() {
  
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'unread' | 'groups'
-  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
-  const filterDropdownRef = React.useRef(null);
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+  const filterRef = React.useRef(null);
 
-  // Close filter dropdown on outside click
+  // Close filter popover on outside click
   React.useEffect(() => {
-    const handleOutsideFilterClick = (e) => {
-      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target)) {
-        setShowFilterDropdown(false);
+    const handleClickOutside = (e) => {
+      if (filterRef.current && !filterRef.current.contains(e.target)) {
+        setIsFilterMenuOpen(false);
       }
     };
-    document.addEventListener("mousedown", handleOutsideFilterClick);
-    return () => document.removeEventListener("mousedown", handleOutsideFilterClick);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Extract known users map from active chats / users list for accurate profile resolution
@@ -339,28 +494,69 @@ export default function ChatSidebar() {
     return deduplicatedChats.filter(c => c.isGroup || c.type === 'group').length;
   }, [deduplicatedChats]);
 
-  // Filter conversation list based on search query and category filter
-  const displayChats = useMemo(() => {
-    return deduplicatedChats.filter((chat) => {
-      // 1. Search filter
-      if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase();
-        const chatName = (chat.isGroup ? chat.groupName : (chat.name || chat.displayName || ''))?.toLowerCase();
-        const lastMsg = (chat.lastMessage || '')?.toLowerCase();
-        if (!chatName.includes(query) && !lastMsg.includes(query)) return false;
-      }
+  // Categorized Two-Tier Search Engine (Chats & Contacts + Messages)
+  const searchResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
 
-      // 2. Category Filter
-      if (activeFilter === 'unread') {
-        const unread = chat.unreadCount || chat.unreadCounts?.[currentUser?.uid] || 0;
-        return unread > 0;
+    if (!query) {
+      const baseList = deduplicatedChats.filter((chat) => {
+        if (activeFilter === 'unread') {
+          const unread = chat.unreadCount || chat.unreadCounts?.[currentUser?.uid] || 0;
+          return unread > 0;
+        }
+        if (activeFilter === 'groups') {
+          return chat.isGroup || chat.type === 'group';
+        }
+        return true;
+      });
+      return { isSearching: false, chatMatches: baseList, messageMatches: [] };
+    }
+
+    const chatMatches = [];
+    const messageMatches = [];
+
+    deduplicatedChats.forEach((chat) => {
+      const details = resolveChatDetails(chat, currentUser?.uid, allUsersList);
+      
+      // Multi-Field Matching: Name, Email, Username, Group Name/Desc, Messages
+      const nameMatch = details.title.toLowerCase().includes(query);
+      const emailMatch = (details.email || '').toLowerCase().includes(query);
+      const usernameMatch = (details.username || '').toLowerCase().includes(query);
+      const groupMatch = details.isGroup && (
+        (chat.groupName || '').toLowerCase().includes(query) ||
+        (chat.name || '').toLowerCase().includes(query) ||
+        (chat.groupDescription || '').toLowerCase().includes(query)
+      );
+
+      const lastMsg = chat.lastMessage || chat.lastMessageText || chat.latestMessage?.text || '';
+      const lastMsgMatch = String(lastMsg).toLowerCase().includes(query);
+
+      // If contact name, email, username or group title/desc matches -> Chats & Contacts section
+      if (nameMatch || emailMatch || usernameMatch || groupMatch) {
+        chatMatches.push({
+          ...chat,
+          resolvedTitle: details.title,
+          resolvedAvatar: details.avatar,
+          resolvedEmail: details.email,
+          resolvedUsername: details.username,
+          resolvedIsGroup: details.isGroup,
+        });
+      } 
+      // If message content matches -> Messages section
+      else if (lastMsgMatch) {
+        messageMatches.push({
+          ...chat,
+          resolvedTitle: details.title,
+          resolvedAvatar: details.avatar,
+          resolvedEmail: details.email,
+          resolvedUsername: details.username,
+          matchedSnippet: lastMsg,
+        });
       }
-      if (activeFilter === 'groups') {
-        return chat.isGroup === true || chat.type === 'group';
-      }
-      return true;
     });
-  }, [deduplicatedChats, searchQuery, activeFilter, currentUser?.uid]);
+
+    return { isSearching: true, chatMatches, messageMatches };
+  }, [deduplicatedChats, searchQuery, activeFilter, currentUser, allUsersList]);
 
   const handleLogout = async () => {
     try {
@@ -495,126 +691,286 @@ export default function ChatSidebar() {
         </div>
       </div>
 
-      {/* 2. UNIFIED STATUS BUTTON + SEARCH BAR ROW */}
-      <div className="px-3 py-2 border-b border-gray-800/60 flex items-center gap-2 relative select-none" ref={filterDropdownRef}>
+      {/* 2. TOP SEARCH BAR & STATUS BUTTON ROW */}
+      <div className="px-3.5 py-2.5 flex items-center gap-2 select-none">
         
-        {/* A. STATUS BUTTON (ALWAYS SHOWS ICON + "STATUS" TEXT ON MOBILE & DESKTOP) */}
+        {/* A. STATUS PILL BUTTON */}
         <button
           type="button"
           onClick={handleStatusButtonClick}
-          className="group relative p-0.5 rounded-2xl bg-gradient-to-tr from-teal-400 via-emerald-400 to-cyan-500 shrink-0 hover:scale-105 active:scale-95 transition-all shadow-md cursor-pointer"
+          className="relative flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-teal-500/80 bg-teal-950/30 hover:bg-teal-900/40 text-teal-400 hover:text-teal-300 transition-all cursor-pointer shrink-0 shadow-sm"
           title="Status Updates"
         >
-          <div className="px-2.5 py-1.5 rounded-[14px] bg-gray-950 flex items-center gap-1.5 text-teal-300">
-            {/* Status Icon */}
-            <svg className="w-4 h-4 stroke-[2.2] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            
-            {/* Always Visible "Status" Label */}
-            <span className="text-xs font-bold tracking-tight inline-block select-none">
-              Status
-            </span>
-          </div>
-          
+          <svg className="w-3.5 h-3.5 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span className="text-xs font-semibold tracking-wide">Status</span>
+
           {/* Notification Dot */}
           {statuses.length > 0 && (
             <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 border border-gray-950 animate-pulse" />
           )}
         </button>
 
-        {/* B. SEARCH BAR WITH EMBEDDED FILTER ICON */}
-        <div className="flex-1 flex items-center gap-1.5 bg-gray-900/90 border border-gray-800 focus-within:border-teal-500/80 rounded-2xl px-3 py-1.5 transition-all">
-          <svg className="w-4 h-4 text-gray-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        {/* B. SEARCH BAR PILL WITH INLINE FILTER */}
+        <div className="relative flex-1 flex items-center gap-2 bg-[#0d1527]/90 border border-slate-800/80 focus-within:border-teal-500/60 rounded-full px-3 py-1.5 transition-all">
+          {/* Search Icon */}
+          <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
 
+          {/* Input */}
           <input
             type="text"
-            placeholder="Search chats..."
+            placeholder="Search by name, username, email, group or message..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="flex-1 bg-transparent border-none outline-none text-xs text-white placeholder-gray-500"
+            className="flex-1 min-w-0 bg-transparent border-none outline-none text-xs text-slate-200 placeholder-slate-500"
           />
 
-          {/* Clear Search */}
+          {/* Clear Search '✕' */}
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="text-gray-500 hover:text-white text-xs px-1 cursor-pointer"
+              className="p-0.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              title="Clear search"
             >
-              ✕
+              <svg className="w-3 h-3 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
             </button>
           )}
 
-          {/* Filter Funnel Icon */}
-          <button
-            type="button"
-            onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-            className={`p-1 rounded-lg transition-all relative cursor-pointer ${
-              activeFilter !== 'all' ? 'text-teal-400 bg-teal-500/20' : 'text-gray-400 hover:text-white'
-            }`}
-            title="Filter chats"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-            </svg>
-
-            {/* Active Dot */}
-            {activeFilter !== 'all' && (
-              <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 ring-2 ring-gray-950 animate-pulse" />
-            )}
-          </button>
-        </div>
-
-        {/* FILTER DROPDOWN MENU */}
-        {showFilterDropdown && (
-          <div className="absolute right-3 top-full mt-1.5 z-40 w-44 bg-gray-950/95 backdrop-blur-xl border border-gray-800 rounded-2xl p-1 shadow-2xl space-y-0.5 animate-in fade-in duration-100">
+          {/* INLINE FILTER TRIGGER BUTTON */}
+          <div className="relative" ref={filterRef}>
             <button
               type="button"
-              onClick={() => { setActiveFilter('all'); setShowFilterDropdown(false); }}
-              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
-                activeFilter === 'all' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
+              onClick={() => setIsFilterMenuOpen((prev) => !prev)}
+              className={`p-1 rounded-full transition-all flex items-center gap-1 cursor-pointer ${
+                activeFilter !== 'all'
+                  ? 'bg-teal-500/20 text-teal-400'
+                  : 'text-slate-400 hover:text-white'
               }`}
+              title="Filter Chats"
             >
-              <span>All Chats</span>
-              <span className="text-[10px] opacity-75">{deduplicatedChats.length}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => { setActiveFilter('unread'); setShowFilterDropdown(false); }}
-              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
-                activeFilter === 'unread' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
-              }`}
-            >
-              <span>Unread</span>
-              {unreadCount > 0 && (
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-rose-500 text-white">
-                  {unreadCount}
+              <svg className="w-3 h-3 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+              {activeFilter !== 'all' && (
+                <span className="text-[9px] font-bold uppercase tracking-tight text-teal-300">
+                  {activeFilter}
                 </span>
               )}
             </button>
-            <button
-              type="button"
-              onClick={() => { setActiveFilter('groups'); setShowFilterDropdown(false); }}
-              className={`flex items-center justify-between w-full px-3 py-2 text-xs font-semibold rounded-xl cursor-pointer ${
-                activeFilter === 'groups' ? 'bg-teal-500 text-gray-950 font-bold' : 'text-gray-300 hover:bg-gray-800'
-              }`}
-            >
-              <span>Groups</span>
-              <span className="text-[10px] opacity-75">{groupsCount}</span>
-            </button>
-          </div>
-        )}
 
+            {/* FLOATING FILTER POPOVER MENU */}
+            {isFilterMenuOpen && (
+              <div className="absolute right-0 top-8 w-40 bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl shadow-black p-1.5 z-50 animate-in fade-in zoom-in-95 duration-100">
+                {[
+                  { id: 'all', label: 'All Chats', icon: '💬', count: deduplicatedChats.length },
+                  { id: 'unread', label: 'Unread', icon: '📬', count: unreadCount },
+                  { id: 'groups', label: 'Groups', icon: '👥', count: groupsCount },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveFilter(item.id);
+                      setIsFilterMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                      activeFilter === item.id
+                        ? 'bg-teal-500 text-slate-950 font-bold'
+                        : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>{item.icon}</span>
+                      <span>{item.label}</span>
+                    </div>
+                    {item.count > 0 && (
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                        activeFilter === item.id ? 'bg-slate-950/20 text-slate-950' : 'bg-slate-800 text-slate-400'
+                      }`}>
+                        {item.count}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+        </div>
       </div>
 
-      {/* 3. CONVERSATION LIST */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1">
+      {/* 3. CONVERSATION LIST / SEARCH RESULTS */}
+      <div className="flex-1 overflow-y-auto custom-scrollbar divide-y divide-gray-900/40">
         {chatsLoading ? (
           <p className="text-center text-slate-300 text-xs py-8">Updating chats stream...</p>
-        ) : displayChats.length === 0 ? (
+        ) : searchResults.isSearching ? (
+          <div>
+            {/* 1. CHATS SECTION */}
+            {searchResults.chatMatches.length > 0 && (
+              <div>
+                <div className="px-4 py-2 bg-gray-950/90 text-[10px] font-extrabold uppercase tracking-wider text-teal-400 border-b border-gray-900 flex items-center justify-between">
+                  <span>Chats & Contacts</span>
+                  <span className="text-gray-500 font-bold">{searchResults.chatMatches.length}</span>
+                </div>
+                {searchResults.chatMatches.map((chat) => {
+                  const targetId = chat.id || chat.chatId || chat.roomId;
+                  const isGrp = chat.isGroup || chat.type === 'group';
+                  return (
+                    <div
+                      key={targetId}
+                      onClick={() => {
+                        if (isGrp) {
+                          setActiveChat({
+                            id: targetId,
+                            chatId: targetId,
+                            groupName: chat.resolvedTitle,
+                            groupAvatar: chat.resolvedAvatar || null,
+                            groupDescription: chat.groupDescription || '',
+                            admins: chat.admins || [chat.createdBy],
+                            onlyAdminsCanMessage: chat.onlyAdminsCanMessage || false,
+                            participants: chat.participants,
+                            createdBy: chat.createdBy,
+                            isGroup: true,
+                            type: 'group'
+                          });
+                        } else {
+                          const otherUid = chat.participants?.find(id => id !== currentUser?.uid);
+                          setActiveChat({
+                            id: targetId,
+                            chatId: targetId,
+                            roomId: targetId,
+                            participants: chat.participants,
+                            recipient: {
+                              uid: otherUid,
+                              displayName: chat.resolvedTitle,
+                              photoURL: chat.resolvedAvatar,
+                              email: chat.resolvedEmail
+                            },
+                            isGroup: false
+                          });
+                        }
+                      }}
+                      className="flex items-center gap-3 p-3 hover:bg-gray-900/60 cursor-pointer transition-colors"
+                    >
+                      <img
+                        src={chat.resolvedAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(chat.resolvedTitle || 'User')}&background=0d9488&color=fff&bold=true`}
+                        alt=""
+                        className="w-11 h-11 rounded-2xl object-cover border border-gray-800 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 text-left">
+                        <h4 className="text-xs font-bold text-white truncate">
+                          <HighlightText text={chat.resolvedTitle} highlight={searchQuery} />
+                        </h4>
+                        <p className="text-[11px] text-gray-400 truncate mt-0.5">
+                          {chat.resolvedIsGroup ? (
+                            chat.groupDescription ? (
+                              <HighlightText text={chat.groupDescription} highlight={searchQuery} />
+                            ) : (
+                              chat.lastMessage || 'Group conversation'
+                            )
+                          ) : chat.resolvedUsername && chat.resolvedUsername.toLowerCase().includes(searchQuery.toLowerCase()) ? (
+                            <span>
+                              @<HighlightText text={chat.resolvedUsername} highlight={searchQuery} />
+                              {chat.resolvedEmail && ` • ${chat.resolvedEmail}`}
+                            </span>
+                          ) : chat.resolvedEmail ? (
+                            <HighlightText text={chat.resolvedEmail} highlight={searchQuery} />
+                          ) : (
+                            chat.lastMessage || 'Direct connection'
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* 2. MESSAGES SECTION */}
+            {searchResults.messageMatches.length > 0 && (
+              <div>
+                <div className="px-4 py-2 bg-gray-950/90 text-[10px] font-extrabold uppercase tracking-wider text-teal-400 border-b border-gray-900 flex items-center justify-between">
+                  <span>Messages</span>
+                  <span className="text-gray-500 font-bold">{searchResults.messageMatches.length}</span>
+                </div>
+                {searchResults.messageMatches.map((chat) => {
+                  const targetId = chat.id || chat.chatId || chat.roomId;
+                  const isGrp = chat.isGroup || chat.type === 'group';
+                  return (
+                    <div
+                      key={targetId}
+                      onClick={() => {
+                        if (isGrp) {
+                          setActiveChat({
+                            id: targetId,
+                            chatId: targetId,
+                            groupName: chat.resolvedTitle,
+                            groupAvatar: chat.resolvedAvatar || null,
+                            groupDescription: chat.groupDescription || '',
+                            admins: chat.admins || [chat.createdBy],
+                            onlyAdminsCanMessage: chat.onlyAdminsCanMessage || false,
+                            participants: chat.participants,
+                            createdBy: chat.createdBy,
+                            isGroup: true,
+                            type: 'group'
+                          });
+                        } else {
+                          const otherUid = chat.participants?.find(id => id !== currentUser?.uid);
+                          setActiveChat({
+                            id: targetId,
+                            chatId: targetId,
+                            roomId: targetId,
+                            participants: chat.participants,
+                            recipient: {
+                              uid: otherUid,
+                              displayName: chat.resolvedTitle,
+                              photoURL: chat.resolvedAvatar,
+                              email: chat.resolvedEmail
+                            },
+                            isGroup: false
+                          });
+                        }
+                      }}
+                      className="flex items-center gap-3 p-3 hover:bg-gray-900/60 cursor-pointer transition-colors"
+                    >
+                      <div className="w-10 h-10 rounded-2xl bg-gray-900 border border-gray-800 flex items-center justify-center text-teal-400 shrink-0 text-sm">
+                        💬
+                      </div>
+                      <div className="flex-1 min-w-0 text-left">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-xs font-bold text-gray-300 truncate">{chat.resolvedTitle}</h4>
+                          <span className="text-[10px] text-gray-500">Recent</span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 truncate mt-0.5">
+                          <HighlightText text={chat.matchedSnippet} highlight={searchQuery} />
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* EMPTY SEARCH STATE */}
+            {searchResults.chatMatches.length === 0 && searchResults.messageMatches.length === 0 && (
+              <div className="flex flex-col items-center justify-center h-48 text-center px-4 text-gray-500 select-none">
+                <div className="w-10 h-10 rounded-2xl bg-gray-900 border border-gray-800 flex items-center justify-center mb-2 text-gray-400">
+                  🔍
+                </div>
+                <p className="text-xs font-semibold text-gray-300">No results found</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  No chats or messages matching &quot;{searchQuery}&quot;
+                </p>
+              </div>
+            )}
+          </div>
+        ) : searchResults.chatMatches.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-center px-4 text-gray-500 select-none">
             <div className="w-10 h-10 rounded-2xl bg-gray-900/80 border border-gray-800 flex items-center justify-center mb-2 text-gray-400 text-lg">
               💬
@@ -628,7 +984,7 @@ export default function ChatSidebar() {
             </button>
           </div>
         ) : (
-          displayChats.map((c) => (
+          searchResults.chatMatches.map((c) => (
             <ChatListItem
               key={c.id || c.chatId || c.roomId || Math.random().toString()}
               chat={c}
