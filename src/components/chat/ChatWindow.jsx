@@ -18,12 +18,13 @@ import JitsiCallRoom from '../JitsiCallRoom';
 import UserSearchModal from './UserSearchModal';
 import AddToGroupModal from './AddToGroupModal';
 import CreatePollModal from './CreatePollModal';
+import ForwardModal from './ForwardModal';
 import GiphyPicker from './GiphyPicker';
 import VoiceRecorderBar from './VoiceRecorderBar';
 import ChatToast from '../ChatToast';
 
 export default function ChatWindow() {
-  const { activeChat, setActiveChat, setPreviewImage } = useChat();
+  const { activeChat, setActiveChat, setPreviewImage, chats } = useChat();
   const { currentUser, userProfile: currentUserProfile } = useAuth();
 
   const [messages, setMessages] = useState([]);
@@ -33,6 +34,8 @@ export default function ChatWindow() {
   const { initiateCall } = useCall();
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
+  const [messageToForward, setMessageToForward] = useState(null);
+  const [showForwardModal, setShowForwardModal] = useState(false);
   const [isSelectMode, setIsSelectMode] = useState(false);
   const [selectedMessageIds, setSelectedMessageIds] = useState([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -45,8 +48,24 @@ export default function ChatWindow() {
   const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
   const [toastMessage, setToastMessage] = useState(null);
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
+  const [usersDirectory, setUsersDirectory] = useState({});
   const lastTypingHeartbeatRef = useRef(0);
   const toastTimeoutRef = useRef(null);
+
+  // Real-time Users Directory for Google Names & Avatars
+  useEffect(() => {
+    if (!currentUser?.uid) return;
+    const unsub = onSnapshot(collection(db, 'users'), (snapshot) => {
+      const dir = {};
+      snapshot.forEach((d) => {
+        dir[d.id] = { id: d.id, uid: d.id, ...d.data() };
+      });
+      setUsersDirectory(dir);
+    }, (err) => {
+      console.warn("User directory subscription error:", err);
+    });
+    return () => unsub();
+  }, [currentUser?.uid]);
 
   // Send Recorded Voice Note
   const handleSendVoiceNote = async (audioBlob, durationSec) => {
@@ -1377,6 +1396,10 @@ export default function ChatWindow() {
                             currentUser={currentUser}
                             onReply={handleStartReply}
                             onEdit={handleStartEdit}
+                            onForward={(msg) => {
+                              setMessageToForward(msg);
+                              setShowForwardModal(true);
+                            }}
                             onDeleteForMe={handleDeleteForMe}
                             onDeleteForEveryone={handleDeleteForEveryone}
                             formatTimeSafe={formatTimeSafe}
@@ -2358,6 +2381,20 @@ export default function ChatWindow() {
         onClose={() => setShowPollModal(false)}
         activeChatId={roomId}
         currentUser={currentUser}
+      />
+
+      {/* Message Forwarding Modal */}
+      <ForwardModal
+        isOpen={showForwardModal}
+        onClose={() => {
+          setShowForwardModal(false);
+          setMessageToForward(null);
+        }}
+        messageToForward={messageToForward}
+        chats={chats}
+        usersDirectory={usersDirectory}
+        currentUser={currentUser}
+        onForwardSuccess={() => showToast('Message forwarded successfully!')}
       />
 
       {/* Action Feedback Toast */}

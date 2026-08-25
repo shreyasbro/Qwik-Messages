@@ -15,6 +15,7 @@ export default function MessageBubble({
   currentUser, 
   onReply, 
   onEdit, 
+  onForward,
   onDeleteForMe, 
   onDeleteForEveryone,
   formatTimeSafe,
@@ -40,6 +41,15 @@ export default function MessageBubble({
   // Helper: Trigger Toast Popup
   const triggerToast = (text) => {
     if (onShowToast) onShowToast(text);
+  };
+
+  // FORWARD MESSAGE ACTION
+  const handleForwardMessage = (e) => {
+    if (e) e.stopPropagation();
+    setMenuOpen(false);
+    if (onForward) {
+      onForward(message);
+    }
   };
 
   // 1. DOWNLOAD / SAVE MEDIA (NATIVE MOBILE SAVE TO GALLERY & DESKTOP FALLBACK)
@@ -597,6 +607,18 @@ export default function MessageBubble({
             }}
           >
 
+          {/* ↪ FORWARDED INDICATOR */}
+          {message.isForwarded && (
+            <div className={`flex items-center gap-1 text-[10px] font-bold italic mb-1.5 opacity-90 select-none ${
+              isMe ? 'text-slate-900' : 'text-teal-400'
+            }`}>
+              <svg className="w-3.5 h-3.5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+              <span>Forwarded</span>
+            </div>
+          )}
+
           {/* Quoted Reply Banner */}
           {message.replyTo && (
             <div className="mb-2 p-2 rounded-lg bg-black/30 border-l-2 border-emerald-400 text-xs text-slate-300">
@@ -892,6 +914,18 @@ export default function MessageBubble({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
                       </svg>
                       <span>Reply</span>
+                    </button>
+
+                    {/* Forward Message Button */}
+                    <button
+                      type="button"
+                      onClick={handleForwardMessage}
+                      className="flex items-center gap-2.5 w-full px-3 py-2 text-xs font-semibold text-teal-300 hover:bg-teal-500/20 hover:text-teal-200 rounded-xl transition-colors cursor-pointer text-left"
+                    >
+                      <svg className="w-4 h-4 text-teal-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                      </svg>
+                      <span>Forward</span>
                     </button>
 
                     {/* 2. Download (for images, videos, audio & documents) */}
