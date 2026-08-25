@@ -12,7 +12,8 @@ import {
   limit,
   serverTimestamp,
   arrayUnion,
-  writeBatch
+  writeBatch,
+  increment
 } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
@@ -126,12 +127,24 @@ export const chatService = {
 
     const docRef = await addDoc(messagesRef, msgData);
 
-    // Update last message in parent chat room
-    await setDoc(doc(db, 'chats', chatId), {
+    // Fetch existing room participants to increment unread count for recipients
+    const chatRef = doc(db, 'chats', chatId);
+    const chatSnap = await getDoc(chatRef);
+    const participants = chatSnap.exists() ? (chatSnap.data().participants || []) : [];
+    const otherParticipants = participants.filter(id => id !== senderId);
+
+    const updatePayload = {
       lastMessage: text || (mediaUrl ? '📁 Attachment' : ''),
       lastMessageTime: new Date().toISOString(),
+      lastMessageSenderId: senderId,
       updatedAt: serverTimestamp()
-    }, { merge: true });
+    };
+
+    otherParticipants.forEach((uid) => {
+      updatePayload[`unreadCounts.${uid}`] = increment(1);
+    });
+
+    await setDoc(chatRef, updatePayload, { merge: true });
 
     return docRef.id;
   },

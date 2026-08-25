@@ -12,7 +12,7 @@ import PresenceBadge from '../profile/PresenceBadge';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { auth, db } from '../../firebaseConfig';
-import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, updateDoc, arrayUnion, arrayRemove, query, orderBy, limit, getDocs, onSnapshot, deleteField } from 'firebase/firestore';
+import { doc, collection, addDoc, setDoc, serverTimestamp, deleteDoc, updateDoc, arrayUnion, arrayRemove, query, orderBy, limit, getDocs, onSnapshot, deleteField, increment } from 'firebase/firestore';
 import axios from 'axios';
 import JitsiCallRoom from '../JitsiCallRoom';
 import UserSearchModal from './UserSearchModal';
@@ -79,12 +79,23 @@ export default function ChatWindow() {
       });
 
       const roomRef = doc(db, 'chats', targetRoomId);
-      await setDoc(roomRef, {
+      const otherParticipants = (activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean))
+        .filter(id => id !== senderId);
+
+      const roomUpdatePayload = {
         id: targetRoomId,
         lastMessage: '🎤 Voice message',
+        lastMessageTime: new Date().toISOString(),
+        lastMessageSenderId: senderId,
         updatedAt: serverTimestamp(),
         participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
-      }, { merge: true });
+      };
+
+      otherParticipants.forEach((uid) => {
+        roomUpdatePayload[`unreadCounts.${uid}`] = increment(1);
+      });
+
+      await setDoc(roomRef, roomUpdatePayload, { merge: true });
 
       showToast('Voice note sent!');
       await clearTypingImmediately();
@@ -119,12 +130,23 @@ export default function ChatWindow() {
       });
 
       const roomRef = doc(db, 'chats', targetRoomId);
-      await setDoc(roomRef, {
+      const otherParticipants = (activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean))
+        .filter(id => id !== senderId);
+
+      const roomUpdatePayload = {
         id: targetRoomId,
         lastMessage: type === 'sticker' ? '🎨 Sticker' : '🎬 GIF',
+        lastMessageTime: new Date().toISOString(),
+        lastMessageSenderId: senderId,
         updatedAt: serverTimestamp(),
         participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
-      }, { merge: true });
+      };
+
+      otherParticipants.forEach((uid) => {
+        roomUpdatePayload[`unreadCounts.${uid}`] = increment(1);
+      });
+
+      await setDoc(roomRef, roomUpdatePayload, { merge: true });
 
       await clearTypingImmediately();
     } catch (err) {
@@ -464,6 +486,16 @@ export default function ChatWindow() {
             return false;
           });
 
+          // Auto-clear unread count if user is currently inside this active chat room
+          const myUnread = Number(data.unreadCounts?.[currentUid] || 0);
+          if (myUnread > 0) {
+            setDoc(chatDocRef, {
+              unreadCounts: {
+                [currentUid]: 0
+              }
+            }, { merge: true }).catch((e) => console.warn('Could not auto-clear unread in active view:', e));
+          }
+
           setIsOtherUserTyping(isOtherTyping);
         } else {
           setPinnedMessage(null);
@@ -621,10 +653,28 @@ export default function ChatWindow() {
     setIsEditingDesc(false);
   }, [activeChat?.groupDescription, activeChat?.id]);
 
+  // Auto-clear unread messages status and parent room unreadCounts[currentUser.uid]
   useEffect(() => {
     const roomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
-    if (!roomId || !messages || messages.length === 0 || !currentUser?.uid) return;
+    if (!roomId || !currentUser?.uid) return;
 
+    // 1. Reset parent room unread count for current user
+    const clearRoomUnread = async () => {
+      try {
+        const roomRef = doc(db, 'chats', roomId);
+        await setDoc(roomRef, {
+          unreadCounts: {
+            [currentUser.uid]: 0
+          }
+        }, { merge: true });
+      } catch (e) {
+        console.warn("Could not clear room unread count:", e);
+      }
+    };
+    clearRoomUnread();
+
+    // 2. Mark unread message documents as read
+    if (!messages || messages.length === 0) return;
     const unread = messages.filter(
       (m) => m.senderId !== currentUser.uid && m.status !== 'read'
     );
@@ -753,20 +803,46 @@ export default function ChatWindow() {
         }
         await addDoc(messagesRef, msgPayload);
 
-        // 4. Atomic Parent Room Update (Using setDoc merge to prevent 'No document to update' errors)
+        // 4. Atomic Parent Room Update with Unread Count Increment for other participants
         const roomRef = doc(db, 'chats', targetChatId);
-        await setDoc(roomRef, {
+        
+        let allParticipants = [];
+        if (Array.isArray(activeChat?.participants)) {
+          allParticipants = activeChat.participants;
+        } else if (Array.isArray(activeChat?.participantIds)) {
+          allParticipants = activeChat.participantIds;
+        } else if (activeChat?.recipient?.uid) {
+          allParticipants = [senderId, activeChat.recipient.uid];
+        } else if (activeChat?.recipientUid) {
+          allParticipants = [senderId, activeChat.recipientUid];
+        } else if (activeChat?.user?.uid) {
+          allParticipants = [senderId, activeChat.user.uid];
+        }
+
+        const targetRecipientUids = allParticipants.filter((uid) => uid && uid !== senderId);
+
+        const roomUpdatePayload = {
           id: targetChatId,
           lastMessage: trimmedText,
+          lastMessageTime: new Date().toISOString(),
+          lastMessageSenderId: senderId,
           updatedAt: serverTimestamp(),
-          participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
-        }, { merge: true });
+          participants: allParticipants.length > 0 ? allParticipants : [senderId]
+        };
+
+        // Increment unread count for every recipient in direct and group chats (both map & flat field fallback)
+        targetRecipientUids.forEach((uid) => {
+          roomUpdatePayload[`unreadCounts.${uid}`] = increment(1);
+          roomUpdatePayload[`unread_${uid}`] = increment(1);
+        });
+
+        await setDoc(roomRef, roomUpdatePayload, { merge: true });
 
         setReplyingTo(null);
       }
 
       await clearTypingImmediately();
-      console.log("✅ Message successfully written to Firestore!");
+      console.log("✅ Message successfully written to Firestore with unread counts!");
     } catch (err) {
       console.error("🚨 Firebase Write Error:", err);
       alert(`Failed to send message: ${err.message}`);
@@ -1240,7 +1316,7 @@ export default function ChatWindow() {
               ) : safeMessages.length > 0 ? (
                 /* 🔵 SHOW MESSAGES */
                 (() => {
-                  const getWhatsAppDateLabel = (timestampMillis) => {
+                  const getQwikDateLabel = (timestampMillis) => {
                     const validMillis = timestampMillis || Date.now();
                     const msgDate = new Date(validMillis);
                     const today = new Date();
@@ -1261,10 +1337,19 @@ export default function ChatWindow() {
                     });
                   };
 
+                  const myUnreadCount = Number(
+                    activeChat?.unreadCounts?.[currentUser?.uid] ?? 
+                    activeChat?.[`unread_${currentUser?.uid}`] ?? 
+                    activeChat?.unreadCount ?? 
+                    0
+                  );
+                  const firstUnreadIndex = myUnreadCount > 0 ? safeMessages.length - myUnreadCount : -1;
+
                   return safeMessages.map((m, index) => {
-                    const currentLabel = getWhatsAppDateLabel(m.timestampMillis);
-                    const prevLabel = index > 0 ? getWhatsAppDateLabel(safeMessages[index - 1].timestampMillis) : null;
+                    const currentLabel = getQwikDateLabel(m.timestampMillis);
+                    const prevLabel = index > 0 ? getQwikDateLabel(safeMessages[index - 1].timestampMillis) : null;
                     const showDateHeader = currentLabel !== prevLabel;
+                    const showUnreadDivider = firstUnreadIndex > 0 && index === firstUnreadIndex;
 
                     return (
                       <React.Fragment key={m.id || m.timestampMillis || index}>
@@ -1273,6 +1358,17 @@ export default function ChatWindow() {
                             <span className="bg-[#1e293b]/95 text-slate-200 text-[11px] font-bold px-4 py-1 rounded-full border border-slate-700/80 shadow-md tracking-wider uppercase">
                               {currentLabel}
                             </span>
+                          </div>
+                        )}
+
+                        {/* In-Chat Unread Messages Divider Line */}
+                        {showUnreadDivider && (
+                          <div className="flex items-center justify-center my-4 select-none px-4 z-10">
+                            <div className="flex-1 h-px bg-teal-500/40" />
+                            <span className="mx-3 px-3 py-1 rounded-full bg-teal-500/10 border border-teal-500/30 text-[10px] font-bold uppercase tracking-wider text-teal-300 shadow-sm shadow-teal-500/10">
+                              Unread Messages
+                            </span>
+                            <div className="flex-1 h-px bg-teal-500/40" />
                           </div>
                         )}
                         <div className="message-bubble-item w-full">

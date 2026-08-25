@@ -3,7 +3,7 @@ import { doc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { optimizeMediaUrl } from '../../utils/imageOptimizer';
 
-export default function WhatsAppStatusModal({ 
+export default function QwikStatusModal({ 
   isOpen, 
   onClose, 
   currentUser, 

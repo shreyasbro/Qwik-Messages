@@ -114,7 +114,7 @@ function MainLayoutWrapper() {
       <MainLayout />
       <AccountMergeModal />
       
-      {/* ✅ REFACTOR: WhatsApp/Instagram Style Immersive Media Viewer */}
+      {/* ✅ REFACTOR: Qwik Immersive Media Viewer */}
       {previewImage && (
         <div 
           className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-black/90 backdrop-blur-lg animate-fade-in cursor-zoom-out"

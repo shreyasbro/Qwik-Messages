@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useChat } from '../../context/ChatContext';
 import { useAuth } from '../../context/AuthContext';
 import { userService } from '../../services/userService';
@@ -13,8 +13,8 @@ import CreateGroupModal from './CreateGroupModal';
 import StatusBar from './StatusBar';
 import StatusUploadModal from './StatusUploadModal';
 import StatusViewerModal from './StatusViewerModal';
-import WhatsAppStatusModal from './WhatsAppStatusModal';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import QwikStatusModal from './QwikStatusModal';
+import { collection, doc, setDoc, updateDoc, increment, serverTimestamp, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 
 // 1. KEYWORD HIGHLIGHTER HELPER
@@ -152,9 +152,51 @@ export const resolveChatDetails = (chat, currentUid, usersList = []) => {
   };
 };
 
+// Universal Unread Count Extractor (Multi-Tier: Explicit Count -> Sender & State Fallback -> Session Clear)
+export const getUnreadCount = (chat, myUid, activeChatId = null, readChatIds = new Set()) => {
+  if (!chat || !myUid) return 0;
+
+  const currentChatId = chat.id || chat.chatId || chat.roomId;
+
+  // If chat is currently open on screen or read in this session -> 0 unread
+  if ((activeChatId && currentChatId && activeChatId === currentChatId) || (currentChatId && readChatIds.has(currentChatId))) {
+    return 0;
+  }
+
+  // 1. Tier 1: Explicit Firestore Map Count Fields
+  if (chat.unreadCounts && typeof chat.unreadCounts === 'object') {
+    if (chat.unreadCounts[myUid] !== undefined && chat.unreadCounts[myUid] !== null) {
+      const parsed = Number(chat.unreadCounts[myUid]);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+  }
+
+  // 2. Tier 1 Fallback: Flat field unread_UID
+  if (chat[`unread_${myUid}`] !== undefined && chat[`unread_${myUid}`] !== null) {
+    const parsed = Number(chat[`unread_${myUid}`]);
+    if (!isNaN(parsed) && parsed > 0) return parsed;
+  }
+
+  // 3. Generic fields
+  if (chat.unreadCount !== undefined && chat.unreadCount !== null && Number(chat.unreadCount) > 0) {
+    return Number(chat.unreadCount);
+  }
+  if (chat.unread !== undefined && chat.unread !== null && Number(chat.unread) > 0) {
+    return Number(chat.unread);
+  }
+
+  // 4. Tier 2: Sender & State Fallback (If last message was sent by other user, e.g. Shreyas Thakur)
+  const lastSender = chat.lastMessageSenderId || chat.senderId || chat.latestMessage?.senderId || chat.lastSenderId;
+  if (lastSender && lastSender !== myUid) {
+    return 1;
+  }
+
+  return 0;
+};
+
 export const getChatDisplayInfo = resolveChatDetails;
 
-function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage }) {
+function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreviewImage, readChatIds, setReadChatIds }) {
   const isGroup = chat.isGroup || chat.type === 'group';
   const { recipient } = useRecipient(isGroup ? [] : chat.participants, currentUser?.uid);
   
@@ -166,6 +208,9 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   const activeTargetId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
   const currentChatId = chat.id || chat.chatId || chat.roomId;
   const isActive = Boolean(activeTargetId && currentChatId && activeTargetId === currentChatId);
+
+  const myUid = currentUser?.uid;
+  const unreadCount = getUnreadCount(chat, myUid, activeTargetId, readChatIds);
 
   // Real-time typing status calculation from Firestore chat document (1-second fast sync)
   const isTyping = Boolean(
@@ -191,39 +236,65 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
     }
   };
 
+  const handleOpenChat = async () => {
+    // 1. Instantly mark as read in local session state (UI clears instantly)
+    if (currentChatId && setReadChatIds) {
+      setReadChatIds(prev => new Set(prev).add(currentChatId));
+    }
+
+    if (isGroup) {
+      setActiveChat({
+        id: chat.id || chat.chatId,
+        chatId: chat.id || chat.chatId,
+        groupName: chatName,
+        groupAvatar: chat.groupAvatar || null,
+        groupDescription: chat.groupDescription || '',
+        admins: chat.admins || [chat.createdBy],
+        onlyAdminsCanMessage: chat.onlyAdminsCanMessage || false,
+        participants: chat.participants,
+        createdBy: chat.createdBy,
+        isGroup: true,
+        type: 'group'
+      });
+    } else {
+      if (!recipient) return;
+      setActiveChat({
+        id: chat.id || chat.chatId,
+        chatId: chat.id || chat.chatId,
+        recipient: recipient,
+        participants: chat.participants
+      });
+    }
+
+    // 2. Reset in Firestore if fields exist
+    if (myUid && currentChatId) {
+      try {
+        const roomRef = doc(db, 'chats', currentChatId);
+        await setDoc(roomRef, {
+          unreadCounts: {
+            [myUid]: 0
+          },
+          [`unread_${myUid}`]: 0,
+          unreadCount: 0
+        }, { merge: true });
+      } catch (err) {
+        // Silently catch offline/network errors
+      }
+    }
+  };
+
   return (
     <div
-      onClick={() => {
-        if (isGroup) {
-          setActiveChat({
-            id: chat.id || chat.chatId,
-            chatId: chat.id || chat.chatId,
-            groupName: chatName,
-            groupAvatar: chat.groupAvatar || null,
-            groupDescription: chat.groupDescription || '',
-            admins: chat.admins || [chat.createdBy],
-            onlyAdminsCanMessage: chat.onlyAdminsCanMessage || false,
-            participants: chat.participants,
-            createdBy: chat.createdBy,
-            isGroup: true,
-            type: 'group'
-          });
-          return;
-        }
-        if (!recipient) return;
-        setActiveChat({
-          id: chat.id || chat.chatId,
-          chatId: chat.id || chat.chatId,
-          recipient: recipient,
-          participants: chat.participants
-        });
-      }}
-      className={`flex items-center gap-4 p-3.5 mx-2 mb-1.5 rounded-2xl cursor-pointer transition-all duration-300 ease-in-out border ${
+      onClick={handleOpenChat}
+      className={`relative flex items-center gap-3.5 px-3.5 py-3 mx-1 mb-1 rounded-2xl cursor-pointer transition-all duration-300 ease-in-out border-l-4 border ${
         isActive 
-          ? 'bg-teal-500/10 border-teal-500/40 shadow-lg shadow-black/25' 
+          ? 'bg-teal-500/10 border-teal-500/40 border-l-teal-400 shadow-lg shadow-black/25' 
+          : unreadCount > 0
+          ? 'bg-teal-500/[0.04] border-slate-800/80 border-l-teal-400 hover:bg-slate-800/60 shadow-sm'
           : 'bg-transparent border-transparent hover:bg-slate-800/40 hover:border-slate-700/50'
       }`}
     >
+      {/* 1. AVATAR WITH GLOWING RING & PULSE DOT */}
       <div className="relative shrink-0 select-none">
         <img 
           src={avatarSrc} 
@@ -233,9 +304,15 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
             e.stopPropagation();
             setPreviewImage(avatarSrc);
           }}
-          className="w-11 h-11 rounded-2xl object-cover border border-slate-700/60 cursor-pointer hover:brightness-90 transition-all active:scale-95" 
+          className={`w-11 h-11 rounded-full object-cover cursor-pointer hover:brightness-90 transition-all active:scale-95 ${
+            unreadCount > 0 
+              ? 'ring-2 ring-teal-400 ring-offset-2 ring-offset-slate-950 shadow-md shadow-teal-500/20' 
+              : 'border border-slate-700/60'
+          }`} 
         />
-        {isTyping ? (
+        {unreadCount > 0 ? (
+          <span className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-teal-400 rounded-full border-2 border-slate-950 animate-pulse shadow-sm shadow-teal-400 z-10" />
+        ) : isTyping ? (
           <span 
             className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-teal-400 flex items-center justify-center shadow-[0_0_10px_rgba(45,212,191,0.7)] animate-pulse z-10"
           />
@@ -243,17 +320,30 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
           <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
         ) : null}
       </div>
-      <div className="flex-grow min-w-0 text-left">
-        <div className="flex justify-between items-center mb-1">
-          <h3 className="text-[13px] font-bold text-slate-200 tracking-wide truncate">{safeString(chatName)}</h3>
-          {chat.lastMessageTime && (
-            <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
-              {formatTimeSafe(chat.lastMessageTime)}
+      <div className="flex-1 min-w-0 flex items-center justify-between gap-2">
+        {/* Left Text Block */}
+        <div className="min-w-0 pr-1 text-left flex-1">
+          <h4 className={`text-sm truncate ${unreadCount > 0 ? 'text-white font-bold tracking-tight' : 'text-slate-200 font-semibold'}`}>
+            {safeString(chatName)}
+          </h4>
+          <p className={`text-xs truncate mt-0.5 ${unreadCount > 0 ? 'text-teal-200 font-semibold' : isTyping ? 'text-teal-400 font-bold animate-pulse' : 'text-slate-400'}`}>
+            {isTyping ? "✍️ typing..." : safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
+          </p>
+        </div>
+
+        {/* Right Meta Block */}
+        <div className="shrink-0 flex flex-col items-end justify-center gap-1 min-w-[50px]">
+          {/* Timestamp: Green if unread, slate-500 if read */}
+          <span className={`text-[11px] ${unreadCount > 0 ? 'text-teal-400 font-bold' : 'text-slate-500 font-medium'}`}>
+            {formatTimeSafe(chat.lastMessageTime) || 'Recent'}
+          </span>
+
+          {/* Circular Green Number Badge */}
+          {unreadCount > 0 && (
+            <span className="w-5 h-5 rounded-full bg-teal-500 text-slate-950 font-black text-[11px] flex items-center justify-center shadow-md shadow-teal-500/30 animate-in zoom-in duration-150">
+              {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
-        </div>
-        <div className={`text-[11px] truncate max-w-[180px] font-medium ${isTyping ? "text-teal-400 font-bold animate-pulse flex items-center gap-1" : "text-slate-400"}`}>
-          {isTyping ? "✍️ typing..." : safeString(chat.lastMessage || 'Say hi to your new friend! 👋')}
         </div>
       </div>
     </div>
@@ -314,6 +404,7 @@ export default function ChatSidebar() {
   const [isStatusViewerOpen, setIsStatusViewerOpen] = useState(false);
   const [statuses, setStatuses] = useState([]);
   const [allUsersList, setAllUsersList] = useState([]);
+  const [readChatIds, setReadChatIds] = useState(new Set());
 
   // Real-time directory of all registered users (for instant 1-on-1 name & Google avatar resolution)
   React.useEffect(() => {
@@ -485,10 +576,28 @@ export default function ChatSidebar() {
     return [...groupRooms, ...Array.from(uniqueRooms.values())];
   }, [chats, currentUser]);
 
+  const activeTargetId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
+
   // Unread & Groups Computations
+  const totalUnreadMessages = useMemo(() => {
+    return (chats || []).reduce((acc, chat) => {
+      const count = getUnreadCount(chat, currentUser?.uid, activeTargetId, readChatIds);
+      return acc + (count > 0 ? count : 0);
+    }, 0);
+  }, [chats, currentUser?.uid, activeTargetId, readChatIds]);
+
+  // Dynamic Browser Tab Title Counter
+  useEffect(() => {
+    if (totalUnreadMessages > 0) {
+      document.title = `(${totalUnreadMessages}) Qwik Messages`;
+    } else {
+      document.title = 'Qwik Messages — Real-Time Secure Chat';
+    }
+  }, [totalUnreadMessages]);
+
   const unreadCount = useMemo(() => {
-    return deduplicatedChats.filter(c => (c.unreadCount || c.unreadCounts?.[currentUser?.uid] || 0) > 0).length;
-  }, [deduplicatedChats, currentUser?.uid]);
+    return deduplicatedChats.filter(c => getUnreadCount(c, currentUser?.uid, activeTargetId, readChatIds) > 0).length;
+  }, [deduplicatedChats, currentUser?.uid, activeTargetId, readChatIds]);
 
   const groupsCount = useMemo(() => {
     return deduplicatedChats.filter(c => c.isGroup || c.type === 'group').length;
@@ -501,8 +610,7 @@ export default function ChatSidebar() {
     if (!query) {
       const baseList = deduplicatedChats.filter((chat) => {
         if (activeFilter === 'unread') {
-          const unread = chat.unreadCount || chat.unreadCounts?.[currentUser?.uid] || 0;
-          return unread > 0;
+          return getUnreadCount(chat, currentUser?.uid, activeTargetId, readChatIds) > 0;
         }
         if (activeFilter === 'groups') {
           return chat.isGroup || chat.type === 'group';
@@ -992,6 +1100,8 @@ export default function ChatSidebar() {
               activeChat={activeChat}
               setActiveChat={setActiveChat}
               setPreviewImage={setPreviewImage}
+              readChatIds={readChatIds}
+              setReadChatIds={setReadChatIds}
             />
           ))
         )}
@@ -1019,8 +1129,8 @@ export default function ChatSidebar() {
         />
       )}
 
-      {/* 1:1 WhatsApp Web Status Viewer Modal */}
-      <WhatsAppStatusModal 
+      {/* Qwik Status Viewer Modal */}
+      <QwikStatusModal 
         isOpen={isStatusViewerOpen} 
         onClose={() => setIsStatusViewerOpen(false)} 
         currentUser={currentUser}
@@ -1029,7 +1139,7 @@ export default function ChatSidebar() {
         onAddStatus={() => setShowUploadModal(true)}
       />
 
-      {/* ⚙️ WHATSAPP-STYLE SETTINGS DRAWER (Slides in from left) */}
+      {/* ⚙️ QWIK SETTINGS DRAWER (Slides in from left) */}
       {isSettingsOpen && (
         <div className="fixed inset-y-0 left-0 z-50 w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 backdrop-blur-3xl flex flex-col shadow-2xl animate-drawer-slide-in select-none">
           
@@ -1050,7 +1160,7 @@ export default function ChatSidebar() {
 
           {/* CONDITIONAL RENDERING BASED ON ACTIVE VIEW */}
           {settingsView === "main" ? (
-            /* Settings List (WhatsApp Style Menu) */
+            /* Settings List (Qwik Style Menu) */
             <div className="flex-1 overflow-y-auto p-4 space-y-3 text-left">
               
               {/* 1. PRIVACY SETTINGS */}
