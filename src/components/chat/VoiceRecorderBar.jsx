@@ -116,15 +116,34 @@ export default function VoiceRecorderBar({ onCancel, onSendAudio }) {
   };
 
   const handleFinishAndSend = () => {
-    if (!mediaRecorderRef.current) return;
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state === 'inactive') return;
 
     mediaRecorderRef.current.onstop = () => {
-      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      if (audioChunksRef.current.length === 0) {
+        console.warn('No audio chunks recorded');
+        cleanupRecording();
+        onCancel();
+        return;
+      }
+
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm;codecs=opus' });
+      if (audioBlob.size === 0) {
+        console.warn('Empty audio blob');
+        cleanupRecording();
+        onCancel();
+        return;
+      }
+
       onSendAudio(audioBlob, recordingTime);
       cleanupRecording();
     };
 
-    mediaRecorderRef.current.stop();
+    if (mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.requestData();
+      } catch (e) {}
+      mediaRecorderRef.current.stop();
+    }
   };
 
   const handleAbort = () => {

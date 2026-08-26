@@ -21,6 +21,7 @@ import CreatePollModal from './CreatePollModal';
 import ForwardModal from './ForwardModal';
 import GiphyPicker from './GiphyPicker';
 import VoiceRecorderBar from './VoiceRecorderBar';
+import DevelopmentModal from './DevelopmentModal';
 import ChatToast from '../ChatToast';
 
 export default function ChatWindow() {
@@ -43,6 +44,7 @@ export default function ChatWindow() {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
+  const [showDevModal, setShowDevModal] = useState(false);
   const [pinnedMessage, setPinnedMessage] = useState(null);
   const [mediaTab, setMediaTab] = useState('photos'); // 'photos' | 'videos' | 'docs'
   const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
@@ -67,17 +69,42 @@ export default function ChatWindow() {
     return () => unsub();
   }, [currentUser?.uid]);
 
+  // Helper to convert Blob to Base64 (instant bulletproof fallback)
+  const blobToBase64 = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+
   // Send Recorded Voice Note
   const handleSendVoiceNote = async (audioBlob, durationSec) => {
     setIsRecordingVoice(false);
     const targetRoomId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
     if (!targetRoomId || !currentUser?.uid) return;
 
+    if (!audioBlob || audioBlob.size === 0) {
+      console.error('Audio recording failed: 0 bytes blob received.');
+      showToast('Empty audio recording');
+      return;
+    }
+
     showToast('Uploading voice note...');
     try {
-      const audioFile = new File([audioBlob], `voice_note_${Date.now()}.webm`, { type: 'audio/webm' });
-      const uploadRes = await uploadMediaDirect(audioFile);
-      const audioUrl = uploadRes.secure_url;
+      let audioUrl = '';
+      try {
+        const audioFile = new File([audioBlob], `voice_note_${Date.now()}.webm`, { type: audioBlob.type || 'audio/webm' });
+        const uploadRes = await uploadMediaDirect(audioFile);
+        audioUrl = uploadRes?.secure_url || '';
+      } catch (uploadErr) {
+        console.warn('Direct upload failed, falling back to Base64 audio...', uploadErr);
+        audioUrl = await blobToBase64(audioBlob);
+      }
+
+      if (!audioUrl) {
+        audioUrl = await blobToBase64(audioBlob);
+      }
 
       const messagesRef = collection(db, 'chats', targetRoomId, 'messages');
       const senderId = currentUser.uid;
@@ -87,11 +114,16 @@ export default function ChatWindow() {
         senderId: senderId,
         senderName: senderName,
         type: 'audio',
+        mediaType: 'audio',
         messageType: 'media',
         mediaUrl: audioUrl,
-        duration: durationSec,
+        fileName: `Voice Note (${durationSec ? Math.floor(durationSec / 60) + ':' + (durationSec % 60 < 10 ? '0' : '') + (durationSec % 60) : '0:00'})`,
+        fileSize: audioBlob.size ? formatFileSize(audioBlob.size) : null,
+        duration: durationSec || 0,
+        isVoice: true,
         text: '🎤 Voice message',
         createdAt: serverTimestamp(),
+        timestamp: serverTimestamp(),
         readBy: [senderId],
         reactions: {},
         starredBy: []
@@ -112,6 +144,7 @@ export default function ChatWindow() {
 
       otherParticipants.forEach((uid) => {
         roomUpdatePayload[`unreadCounts.${uid}`] = increment(1);
+        roomUpdatePayload[`unread_${uid}`] = increment(1);
       });
 
       await setDoc(roomRef, roomUpdatePayload, { merge: true });
@@ -368,17 +401,20 @@ export default function ChatWindow() {
       });
 
       if (cloudData.secure_url) {
-        const isImage = file.type.startsWith('image/');
-        const isVideo = file.type.startsWith('video/');
-        const isAudio = file.type.startsWith('audio/');
-        const isDocument = ['pdf', 'doc', 'docx', 'txt'].includes(fileExt);
+        const mime = file.type || '';
+        const isVideo = mime.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi|m4v)$/i.test(file.name);
+        const isAudio = !isVideo && (mime.startsWith('audio/') || /\.(mp3|wav|ogg|m4a|aac|opus)$/i.test(file.name));
+        const isImage = !isVideo && !isAudio && (mime.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(file.name));
+        const isDocument = !isVideo && !isAudio && !isImage;
+        const determinedType = isVideo ? "video" : isAudio ? "audio" : isImage ? "image" : "document";
 
         const messagesRef = collection(db, 'chats', roomId, 'messages');
         await addDoc(messagesRef, {
           senderId: senderId,
           text: `📎 Sent a file: ${file.name}`,
           messageType: "media", // STRICTLY REQUIRED FOR CRON
-          type: isDocument ? "document" : (isImage ? "image" : (isVideo ? "video" : "audio")),
+          type: determinedType,
+          mediaType: determinedType,
           fileName: file.name,
           fileSize: formatFileSize(file.size),
           fileExt: fileExt,
@@ -394,10 +430,11 @@ export default function ChatWindow() {
         });
 
         // Atomic Parent Room Update
+        const lastPreview = determinedType === 'video' ? '🎥 Video' : determinedType === 'image' ? '📷 Photo' : determinedType === 'audio' ? '🎵 Audio' : `📎 ${file.name}`;
         const roomRef = doc(db, 'chats', roomId);
         await setDoc(roomRef, {
           id: roomId,
-          lastMessage: `📎 Sent a file: ${file.name}`,
+          lastMessage: lastPreview,
           updatedAt: serverTimestamp(),
           participants: activeChat?.participants || [senderId, activeChat?.recipient?.uid].filter(Boolean)
         }, { merge: true });
@@ -1715,7 +1752,7 @@ export default function ChatWindow() {
                         ) : (
                           <button 
                             type="button"
-                            onClick={() => setIsRecordingVoice(true)}
+                            onClick={() => setShowDevModal(true)}
                             className="p-2.5 rounded-2xl bg-gray-900/90 hover:bg-gray-800 border border-gray-800 flex items-center justify-center text-gray-400 hover:text-teal-400 transition-colors cursor-pointer shrink-0"
                             title="Record Voice Note"
                           >
@@ -2395,6 +2432,12 @@ export default function ChatWindow() {
         usersDirectory={usersDirectory}
         currentUser={currentUser}
         onForwardSuccess={() => showToast('Message forwarded successfully!')}
+      />
+
+      {/* Cinematic Development In Progress Modal */}
+      <DevelopmentModal
+        isOpen={showDevModal}
+        onClose={() => setShowDevModal(false)}
       />
 
       {/* Action Feedback Toast */}

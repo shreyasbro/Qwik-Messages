@@ -5,6 +5,9 @@ import { auth, db } from '../../firebaseConfig';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import AudioMessageBubble from './AudioMessageBubble';
 import VoiceMessagePlayer from './VoiceMessagePlayer';
+import AudioPlayer from './AudioPlayer';
+import VoiceNoteBubble from './VoiceNoteBubble';
+import WhatsAppVoiceNote from './WhatsAppVoiceNote';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { getCachedDocument, saveCachedDocument } from '../../utils/documentStorage';
 
@@ -465,8 +468,8 @@ export default function MessageBubble({
             ? 'w-[300px] sm:w-[360px] md:w-[400px] max-w-full'
             : message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
             ? 'w-[300px] sm:w-[370px] md:w-[410px] max-w-full'
-            : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
-            ? 'max-w-[95%]'
+            : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a|opus)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3") || message.type === 'audio')
+            ? 'w-[300px] sm:w-[350px] md:w-[380px] max-w-full'
             : 'max-w-[75%] md:max-w-[65%]'
         }`}
       >
@@ -493,7 +496,7 @@ export default function MessageBubble({
         </AnimatePresence>
 
         <div className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} max-w-full relative ${
-          message.type === 'poll' || message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
+          message.type === 'poll' || message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt) || message.type === 'audio' || message.messageType === 'media'
             ? 'w-full'
             : ''
         }`}>
@@ -583,16 +586,14 @@ export default function MessageBubble({
           {/* Bubble Container - relative context */}
           <div 
             className={`relative rounded-3xl shadow-md text-sm transition-all h-auto min-h-0 flex flex-col box-border shrink-0 break-words [word-break:break-word] ${
-              message.type === 'poll' || message.type === 'sticker'
+              message.type === 'poll' || message.type === 'sticker' || (message.messageType === 'media' && (message.type === 'audio' || message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a|opus)$/i)))
                 ? 'w-full !p-0 bg-transparent border-0 shadow-none'
                 : message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt)
                 ? 'w-full p-2'
                 : 'px-4 py-2.5 w-fit min-w-[110px]'
             } ${
-              message.type === 'poll' || message.type === 'sticker'
+              message.type === 'poll' || message.type === 'sticker' || (message.messageType === 'media' && (message.type === 'audio' || message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a|opus)$/i)))
                 ? ''
-                : message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))
-                ? 'max-w-[95%] bg-transparent border-0 shadow-none !p-0'
                 : isMe 
                   ? 'bg-gradient-to-r from-teal-500 via-emerald-500 to-teal-600 text-slate-950 font-medium rounded-br-none shadow-teal-500/20' 
                   : 'bg-slate-900/90 text-slate-100 border border-slate-800/80 rounded-bl-none'
@@ -606,6 +607,59 @@ export default function MessageBubble({
               userSelect: 'none'
             }}
           >
+
+          {/* 1. INSTAGRAM / WHATSAPP STYLE STORY MENTION QUOTE CARD */}
+          {(message.isStoryReply || message.storyReplyData) && (
+            <div
+              className={`mb-2.5 p-2 rounded-2xl flex items-center gap-3 border backdrop-blur-md overflow-hidden ${
+                isMe
+                  ? 'bg-black/25 border-white/15 text-white'
+                  : 'bg-gray-950/80 border-gray-800 text-gray-200'
+              }`}
+            >
+              {/* Left Thumbnail (Image or Text-Story Color Swatch) */}
+              {message.storyReplyData?.mediaUrl ? (
+                <div className="relative w-12 h-14 rounded-xl overflow-hidden shrink-0 border border-white/20 bg-black">
+                  <img
+                    src={message.storyReplyData.mediaUrl}
+                    alt="Status"
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              ) : (
+                <div
+                  className="w-12 h-14 rounded-xl flex items-center justify-center p-1.5 text-[10px] font-black text-white text-center leading-tight overflow-hidden shrink-0 border border-white/20 shadow-inner"
+                  style={{ background: message.storyReplyData?.bgColor || '#0f766e' }}
+                >
+                  <span className="line-clamp-3 break-words">
+                    {message.storyReplyData?.text || 'Story'}
+                  </span>
+                </div>
+              )}
+
+              {/* Right Story Info */}
+              <div className="min-w-0 flex-1 pr-1 text-left">
+                <div className={`flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider ${
+                  isMe ? 'text-slate-950' : 'text-teal-300'
+                }`}>
+                  {/* Status Clock Icon */}
+                  <svg className="w-3.5 h-3.5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Replied to story</span>
+                </div>
+
+                {/* Quoted Story Caption / Text */}
+                <p className={`text-xs font-semibold truncate mt-0.5 ${isMe ? 'text-slate-900/90' : 'text-gray-300/90'}`}>
+                  {message.storyReplyData?.text ? `"${message.storyReplyData.text}"` : 'Photo Story'}
+                </p>
+
+                <span className={`text-[10px] block mt-0.5 ${isMe ? 'text-slate-900/70' : 'text-gray-400/80'}`}>
+                  {message.storyReplyData?.ownerName ? `${message.storyReplyData.ownerName}'s status` : 'Status update'}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* ↪ FORWARDED INDICATOR */}
           {message.isForwarded && (
@@ -722,7 +776,11 @@ export default function MessageBubble({
 
           {/* TEXT PAYLOAD / CONDITIONAL MEDIA RENDERER */}
           {message.messageType === "media" && message.mediaUrl ? (
-            <div className="mb-1.5 rounded-xl overflow-hidden bg-slate-950/40 border border-black/10 w-full">
+            <div className={`mb-1.5 rounded-xl overflow-hidden w-full ${
+              message.type === 'audio' || message.isVoice || message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a|webm|opus)$/i)
+                ? 'bg-transparent border-0 p-0 shadow-none'
+                : 'bg-slate-950/40 border border-black/10'
+            }`}>
               {message.type === 'document' || ['pdf', 'doc', 'docx', 'txt', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'csv'].includes(message.fileExt) ? (
                 <div className="w-full flex items-center justify-between gap-3 p-3 bg-gray-950/85 hover:bg-gray-950 rounded-xl border border-white/10 shadow-lg select-none">
                   
@@ -796,50 +854,119 @@ export default function MessageBubble({
                   </div>
 
                 </div>
-              ) : message.type === 'audio' || message.mediaUrl.match(/\.(mp3|wav|ogg|aac|m4a|webm)$/i) || message.mediaUrl.includes("/audio/") || message.mediaUrl.includes("/video/upload") || message.text?.endsWith(".mp3") ? (
-                <VoiceMessagePlayer 
-                  audioUrl={message.mediaUrl}
-                  duration={message.duration}
-                  isMe={isMe}
-                />
-              ) : message.mediaUrl.match(/\.(mp4|mov)$/i) || message.mediaUrl.includes("/video/") ? (
-                <video 
-                  controls 
-                  preload="metadata"
-                  className="w-full max-h-72 rounded-lg object-contain bg-black"
-                >
-                  <source src={message.mediaUrl} />
-                  Your browser does not support the video tag.
-                </video>
-              ) : message.type === 'sticker' ? (
-                /* GIPHY STICKER (NO BACKGROUND BUBBLE) */
-                <div className="w-36 h-36 select-none p-1 flex items-center justify-center">
-                  <img
-                    src={message.mediaUrl}
-                    alt="sticker"
-                    className="w-full h-full object-contain filter drop-shadow-lg hover:scale-105 transition-transform"
-                    loading="lazy"
-                  />
-                </div>
-              ) : message.type === 'gif' ? (
-                /* GIPHY GIF */
-                <div className="rounded-2xl overflow-hidden max-w-xs shadow-xl border border-white/10 bg-black/40">
-                  <img
-                    src={message.mediaUrl}
-                    alt="gif"
-                    className="w-full h-full object-cover max-h-64 hover:scale-[1.01] transition-transform"
-                    loading="lazy"
-                  />
-                </div>
               ) : (
-                <a href={message.mediaUrl} target="_blank" rel="noopener noreferrer">
-                  <img 
-                    src={message.mediaUrl} 
-                    alt="Uploaded attachment" 
-                    className="w-full max-h-72 object-cover rounded-lg hover:scale-[1.01] transition-transform duration-200 cursor-pointer"
-                    loading="lazy"
-                  />
-                </a>
+                (() => {
+                  const mediaUrl = message.mediaUrl || message.videoUrl || message.audioUrl || message.fileUrl;
+                  if (!mediaUrl) return null;
+
+                  const urlLower = mediaUrl.toLowerCase();
+                  const isVideo =
+                    message.mediaType === 'video' ||
+                    message.type === 'video' ||
+                    /\.(mp4|webm|mov|mkv|avi|m4v)(\?.*)?$/i.test(urlLower) ||
+                    (urlLower.includes('/video/upload') && !urlLower.includes('.mp3') && !urlLower.includes('.wav') && !urlLower.includes('.ogg'));
+
+                  const isVoiceMessage =
+                    message.isVoice === true ||
+                    message.type === 'voice' ||
+                    message.mediaType === 'voice' ||
+                    (!message.fileName && (urlLower.endsWith('.webm') || urlLower.endsWith('.opus') || urlLower.endsWith('.ogg')));
+
+                  const isAudio =
+                    !isVideo && (
+                      isVoiceMessage ||
+                      message.mediaType === 'audio' ||
+                      message.type === 'audio' ||
+                      /\.(mp3|wav|ogg|m4a|aac|opus|webm)(\?.*)?$/i.test(urlLower) ||
+                      urlLower.includes('/audio/') ||
+                      message.text?.endsWith('.mp3')
+                    );
+
+                  const isSticker = message.type === 'sticker';
+                  const isGif = message.type === 'gif';
+
+                  // 1. VIDEO PLAYER
+                  if (isVideo) {
+                    return (
+                      <div className="relative rounded-2xl overflow-hidden max-w-[340px] bg-black/90 border border-white/10 shadow-lg">
+                        <video
+                          src={mediaUrl}
+                          controls
+                          playsInline
+                          preload="metadata"
+                          className="w-full max-h-[360px] rounded-2xl object-contain bg-black"
+                        >
+                          Your browser does not support video playback.
+                        </video>
+                      </div>
+                    );
+                  }
+
+                  // 2. VOICE NOTE / AUDIO PLAYER
+                  if (isVoiceMessage) {
+                    return (
+                      <VoiceMessagePlayer
+                        src={mediaUrl}
+                        isOwn={isMe}
+                        timestamp={formatTimeSafe(message.createdAt || message.timestamp) || 'Just now'}
+                      />
+                    );
+                  }
+
+                  if (isAudio) {
+                    return (
+                      <AudioPlayer 
+                        src={mediaUrl}
+                        fileName={message.fileName || 'Audio Track'}
+                        fileSize={message.fileSize}
+                        duration={message.duration}
+                        isVoice={false}
+                        isOwn={isMe}
+                        timestamp={formatTimeSafe(message.createdAt || message.timestamp) || 'Just now'}
+                      />
+                    );
+                  }
+
+                  // 3. GIPHY STICKER
+                  if (isSticker) {
+                    return (
+                      <div className="w-36 h-36 select-none p-1 flex items-center justify-center">
+                        <img
+                          src={mediaUrl}
+                          alt="sticker"
+                          className="w-full h-full object-contain filter drop-shadow-lg hover:scale-105 transition-transform"
+                          loading="lazy"
+                        />
+                      </div>
+                    );
+                  }
+
+                  // 4. GIPHY GIF
+                  if (isGif) {
+                    return (
+                      <div className="rounded-2xl overflow-hidden max-w-xs shadow-xl border border-white/10 bg-black/40">
+                        <img
+                          src={mediaUrl}
+                          alt="gif"
+                          className="w-full h-full object-cover max-h-64 hover:scale-[1.01] transition-transform"
+                          loading="lazy"
+                        />
+                      </div>
+                    );
+                  }
+
+                  // 5. IMAGE VIEWER
+                  return (
+                    <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
+                      <img 
+                        src={mediaUrl} 
+                        alt="Uploaded attachment" 
+                        className="w-full max-h-72 object-cover rounded-lg hover:scale-[1.01] transition-transform duration-200 cursor-pointer"
+                        loading="lazy"
+                      />
+                    </a>
+                  );
+                })()
               )}
             </div>
           ) : null}
@@ -852,7 +979,7 @@ export default function MessageBubble({
           )}
 
           {/* TIMESTAMP SHIELD */}
-          {!(message.messageType === "media" && (message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))) && (
+          {!(message.messageType === "media" && (message.type === 'audio' || message.type === 'voice' || message.isVoice || message.mediaUrl?.match(/\.(mp3|wav|ogg|aac|m4a|webm|opus)$/i) || message.mediaUrl?.includes("/audio/") || message.text?.endsWith(".mp3"))) && (
             <div className={`flex items-center gap-1 mt-1 text-[10px] leading-none whitespace-nowrap shrink-0 self-end ${
               isMe ? 'text-slate-950 font-bold' : 'text-slate-400'
             }`}>

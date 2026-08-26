@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, getDocs, addDoc, doc, setDoc, updateDoc, increment, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { optimizeMediaUrl } from '../../utils/imageOptimizer';
 
@@ -18,6 +18,8 @@ export default function QwikStatusModal({
   const [isManualPaused, setIsManualPaused] = useState(false);
   const [isHoldPaused, setIsHoldPaused] = useState(false);
   const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
+  const [replySentSuccess, setReplySentSuccess] = useState(false);
   const timerRef = useRef(null);
 
   const isPaused = isManualPaused || isHoldPaused;
@@ -182,6 +184,102 @@ export default function QwikStatusModal({
     setProgress(0);
     setSelectedUserUid(uid);
     setCurrentStoryIndex(0);
+  };
+
+  // Function to find or create direct chat and send story reply
+  const handleSendStatusReply = async (e) => {
+    if (e) e.preventDefault();
+    if (!replyText.trim() || !activeGroup?.userId || !myUid || replySending || !currentStory) return;
+
+    const targetUid = activeGroup.userId;
+    const currentMsgText = replyText.trim();
+    setReplySending(true);
+
+    try {
+      // 1. Find existing 1-on-1 chat
+      let targetChatId = null;
+      const chatsRef = collection(db, 'chats');
+      const q1 = query(chatsRef, where('participants', 'array-contains', myUid));
+      const snap1 = await getDocs(q1);
+
+      snap1.forEach((d) => {
+        const data = d.data();
+        if (!data.isGroup && data.participants?.includes(targetUid)) {
+          targetChatId = d.id;
+        }
+      });
+
+      // If chat does not exist, create a new 1-on-1 chat
+      if (!targetChatId) {
+        const newChatRef = doc(collection(db, 'chats'));
+        targetChatId = newChatRef.id;
+        await setDoc(newChatRef, {
+          id: targetChatId,
+          isGroup: false,
+          participants: [myUid, targetUid],
+          createdAt: serverTimestamp(),
+          participantsData: {
+            [myUid]: {
+              displayName: currentUser?.displayName || currentUser?.name || 'User',
+              photoURL: currentUser?.photoURL || '',
+              email: currentUser?.email || '',
+            },
+            [targetUid]: {
+              displayName: activeGroup.userName || 'Contact',
+              photoURL: activeGroup.userAvatar || '',
+            },
+          },
+        });
+      }
+
+      // 2. Add Story Reply Message
+      const messagePayload = {
+        text: currentMsgText,
+        isStoryReply: true,
+        storyReplyData: {
+          storyId: currentStory.id || '',
+          mediaUrl: currentStory.mediaUrl || '',
+          text: currentStory.text || '',
+          bgColor: currentStory.bgColor || '#0f766e',
+          type: currentStory.type || (currentStory.mediaUrl ? 'image' : 'text'),
+          ownerName: activeGroup?.userName || 'Contact',
+          ownerAvatar: activeGroup?.userAvatar || '',
+        },
+        senderId: myUid,
+        senderName: currentUser?.displayName || currentUser?.name || 'User',
+        senderAvatar: currentUser?.photoURL || '',
+        createdAt: serverTimestamp(),
+        timestamp: serverTimestamp(),
+        timestampMillis: Date.now()
+      };
+
+      await addDoc(collection(db, 'chats', targetChatId, 'messages'), messagePayload);
+
+      // 3. Atomically update parent chat doc
+      const chatDocRef = doc(db, 'chats', targetChatId);
+      const parentUpdate = {
+        lastMessage: `Replied to status: "${currentMsgText}"`,
+        lastMessageSenderId: myUid,
+        lastMessageTime: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        [`unreadCounts.${targetUid}`]: increment(1),
+        [`unread_${targetUid}`]: increment(1),
+      };
+
+      await updateDoc(chatDocRef, parentUpdate).catch(async () => {
+        await setDoc(chatDocRef, parentUpdate, { merge: true });
+      });
+
+      // 4. Success UI Feedback
+      setReplyText('');
+      setReplySentSuccess(true);
+      setTimeout(() => setReplySentSuccess(false), 2500);
+
+    } catch (error) {
+      console.error('Error sending story reply:', error);
+    } finally {
+      setReplySending(false);
+    }
   };
 
   useEffect(() => {
@@ -511,28 +609,42 @@ export default function QwikStatusModal({
 
             {/* Bottom Reply Bar */}
             {selectedUserUid !== myUid && (
-              <div 
-                className="p-3 bg-gray-950 border-t border-gray-800 z-50 flex items-center gap-2"
+              <form 
+                onSubmit={handleSendStatusReply}
+                className="p-3 bg-gray-950 border-t border-gray-800 z-50 flex items-center gap-2 relative"
                 onMouseDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
               >
+                {/* Success Toast */}
+                {replySentSuccess && (
+                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-teal-500 text-gray-950 text-[11px] font-black px-3 py-1 rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap">
+                    Reply sent to {activeGroup?.userName} ✓
+                  </div>
+                )}
+
                 <input
                   type="text"
-                  placeholder="Type a reply..."
+                  placeholder={`Reply to ${activeGroup?.userName || 'status'}...`}
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
-                  className="flex-1 px-3.5 py-2 bg-gray-900 border border-gray-800 rounded-2xl text-xs text-white placeholder-gray-500 outline-none focus:border-teal-500"
+                  className="flex-1 px-4 py-2 bg-gray-900 border border-gray-800 rounded-2xl text-xs text-white placeholder-gray-500 outline-none focus:border-teal-500 transition-colors"
                 />
+
                 <button
-                  type="button"
-                  onClick={() => setReplyText('')}
-                  className="p-2 rounded-xl bg-teal-500 hover:bg-teal-400 text-gray-950 font-bold transition-all shadow-md cursor-pointer"
+                  type="submit"
+                  disabled={!replyText.trim() || replySending}
+                  className={`p-2 rounded-xl font-bold transition-all shadow-md ${
+                    replyText.trim() && !replySending
+                      ? 'bg-teal-500 hover:bg-teal-400 text-gray-950 shadow-teal-500/20 cursor-pointer active:scale-95'
+                      : 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                  }`}
+                  title="Send Reply"
                 >
                   <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
                   </svg>
                 </button>
-              </div>
+              </form>
             )}
           </div>
         ) : (
