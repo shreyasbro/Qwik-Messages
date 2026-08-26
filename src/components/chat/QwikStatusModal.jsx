@@ -15,9 +15,12 @@ export default function QwikStatusModal({
   const [selectedUserUid, setSelectedUserUid] = useState(null);
   const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
+  const [isManualPaused, setIsManualPaused] = useState(false);
+  const [isHoldPaused, setIsHoldPaused] = useState(false);
   const [replyText, setReplyText] = useState('');
   const timerRef = useRef(null);
+
+  const isPaused = isManualPaused || isHoldPaused;
 
   const myUid = currentUser?.uid;
   const myName = currentUser?.displayName || currentUser?.name || 'My Status';
@@ -86,18 +89,24 @@ export default function QwikStatusModal({
   useEffect(() => {
     if (isOpen) {
       setProgress(0);
-      setIsPaused(false);
+      setIsManualPaused(false);
+      setIsHoldPaused(false);
       setIsClosing(false);
     } else {
       if (timerRef.current) clearInterval(timerRef.current);
       setSelectedUserUid(null);
       setCurrentStoryIndex(0);
+      setIsManualPaused(false);
+      setIsHoldPaused(false);
     }
   }, [isOpen]);
 
-  // Story Progress Timer
+  // Story Progress Timer (Clean Resume on Unpause)
   useEffect(() => {
-    if (!isOpen || isClosing || !currentStory || isPaused) return;
+    if (!isOpen || isClosing || !currentStory || isPaused) {
+      if (timerRef.current) clearInterval(timerRef.current);
+      return;
+    }
 
     if (timerRef.current) clearInterval(timerRef.current);
 
@@ -184,7 +193,11 @@ export default function QwikStatusModal({
       }
       if (e.key === 'ArrowRight') handleNextStory();
       if (e.key === 'ArrowLeft') handlePrevStory();
-      if (e.key === ' ') setIsPaused((p) => !p);
+      if (e.key === ' ') {
+        e.preventDefault();
+        setIsHoldPaused(false);
+        setIsManualPaused((p) => !p);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -337,15 +350,9 @@ export default function QwikStatusModal({
         }`}
       >
         {currentStory ? (
-          <div
-            className="w-full max-w-[440px] h-full max-h-[96vh] md:max-h-[90vh] bg-gray-900 rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between relative border border-gray-800"
-            onMouseDown={() => setIsPaused(true)}
-            onMouseUp={() => setIsPaused(false)}
-            onTouchStart={() => setIsPaused(true)}
-            onTouchEnd={() => setIsPaused(false)}
-          >
+          <div className="w-full max-w-[440px] h-full max-h-[96vh] md:max-h-[90vh] bg-gray-900 rounded-3xl overflow-hidden shadow-2xl flex flex-col justify-between relative border border-gray-800">
             {/* Top Progress Bars */}
-            <div className="absolute top-3 inset-x-3 z-40 flex items-center gap-1.5">
+            <div className="absolute top-3 inset-x-3 z-40 flex items-center gap-1.5 pointer-events-none">
               {activeStories.map((_, idx) => (
                 <div key={idx} className="flex-1 h-1 bg-white/20 rounded-full overflow-hidden">
                   <div
@@ -364,7 +371,11 @@ export default function QwikStatusModal({
             </div>
 
             {/* Header: User Profile & Actions */}
-            <div className="absolute top-6 inset-x-3 z-40 flex items-center justify-between p-2.5 bg-gradient-to-b from-gray-950/90 via-gray-950/50 to-transparent rounded-t-2xl text-white">
+            <div 
+              className="absolute top-6 inset-x-3 z-50 flex items-center justify-between p-2.5 bg-gradient-to-b from-gray-950/90 via-gray-950/50 to-transparent rounded-t-2xl text-white"
+              onMouseDown={(e) => e.stopPropagation()}
+              onTouchStart={(e) => e.stopPropagation()}
+            >
               <div className="flex items-center gap-2.5">
                 {/* Mobile Back to List Arrow */}
                 <button
@@ -393,23 +404,35 @@ export default function QwikStatusModal({
               </div>
 
               <div className="flex items-center gap-1">
+                {/* PLAY / PAUSE BUTTON (WITH EVENT ISOLATION) */}
                 <button
                   type="button"
-                  onClick={() => setIsPaused(!isPaused)}
-                  className="p-1.5 rounded-xl hover:bg-white/15 text-gray-300 hover:text-white transition-colors cursor-pointer"
-                  title={isPaused ? 'Resume' : 'Pause'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsHoldPaused(false);
+                    setIsManualPaused((prev) => !prev);
+                  }}
+                  className="p-2 rounded-xl hover:bg-white/15 text-gray-300 hover:text-white transition-colors cursor-pointer"
+                  title={isPaused ? 'Play' : 'Pause'}
                 >
                   {isPaused ? (
-                    <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+                    <svg className="w-4 h-4 fill-current text-teal-400" viewBox="0 0 24 24">
+                      <path d="M8 5v14l11-7z" />
+                    </svg>
                   ) : (
-                    <svg className="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                    <svg className="w-4 h-4 fill-current text-gray-300" viewBox="0 0 24 24">
+                      <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+                    </svg>
                   )}
                 </button>
 
                 {selectedUserUid === myUid && (
                   <button
                     type="button"
-                    onClick={() => handleDeleteStatus(currentStory.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteStatus(currentStory.id);
+                    }}
                     className="p-1.5 rounded-xl hover:bg-rose-500/20 text-gray-400 hover:text-rose-400 transition-colors cursor-pointer"
                     title="Delete status"
                   >
@@ -421,7 +444,10 @@ export default function QwikStatusModal({
 
                 <button
                   type="button"
-                  onClick={() => setSelectedUserUid(null)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedUserUid(null);
+                  }}
                   className="p-1.5 rounded-xl hover:bg-white/15 text-gray-400 hover:text-white transition-colors cursor-pointer"
                   title="Close story"
                 >
@@ -432,8 +458,14 @@ export default function QwikStatusModal({
               </div>
             </div>
 
-            {/* Media Canvas */}
-            <div className="flex-1 relative flex items-center justify-center bg-gray-950 overflow-hidden">
+            {/* Media Canvas (HOLD TO PAUSE ATTACHED ONLY TO CANVAS) */}
+            <div 
+              className="flex-1 relative flex items-center justify-center bg-gray-950 overflow-hidden"
+              onMouseDown={() => setIsHoldPaused(true)}
+              onMouseUp={() => setIsHoldPaused(false)}
+              onTouchStart={() => setIsHoldPaused(true)}
+              onTouchEnd={() => setIsHoldPaused(false)}
+            >
               {currentStory.type === 'text' || !currentStory.mediaUrl ? (
                 <div
                   className="w-full h-full flex items-center justify-center p-8 text-center"
@@ -444,7 +476,7 @@ export default function QwikStatusModal({
                   </p>
                 </div>
               ) : (
-                <div className="w-full h-full flex flex-col justify-center items-center bg-black relative">
+                <div className="w-full h-full flex flex-col justify-center items-center bg-black relative pointer-events-none">
                   <img
                     src={optimizeMediaUrl(currentStory.mediaUrl)}
                     alt="Status media"
@@ -460,13 +492,30 @@ export default function QwikStatusModal({
                 </div>
               )}
 
-              <div onClick={handlePrevStory} className="absolute inset-y-0 left-0 w-1/3 z-30 cursor-pointer" />
-              <div onClick={handleNextStory} className="absolute inset-y-0 right-0 w-1/3 z-30 cursor-pointer" />
+              {/* NAVIGATION TAP ZONES */}
+              <div 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePrevStory();
+                }} 
+                className="absolute inset-y-0 left-0 w-1/3 z-30 cursor-pointer" 
+              />
+              <div 
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleNextStory();
+                }} 
+                className="absolute inset-y-0 right-0 w-1/3 z-30 cursor-pointer" 
+              />
             </div>
 
             {/* Bottom Reply Bar */}
             {selectedUserUid !== myUid && (
-              <div className="p-3 bg-gray-950 border-t border-gray-800 z-40 flex items-center gap-2">
+              <div 
+                className="p-3 bg-gray-950 border-t border-gray-800 z-50 flex items-center gap-2"
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
                 <input
                   type="text"
                   placeholder="Type a reply..."
