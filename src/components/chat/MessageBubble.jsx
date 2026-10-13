@@ -10,6 +10,7 @@ import VoiceNoteBubble from './VoiceNoteBubble';
 import WhatsAppVoiceNote from './WhatsAppVoiceNote';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { getCachedDocument, saveCachedDocument } from '../../utils/documentStorage';
+import MediaMessageItem from '../MediaMessageItem';
 
 const SUGGESTED_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -885,19 +886,15 @@ export default function MessageBubble({
                   const isSticker = message.type === 'sticker';
                   const isGif = message.type === 'gif';
 
-                  // 1. VIDEO PLAYER
+                  // 1. VIDEO PLAYER (WhatsApp-style Tap to Download)
                   if (isVideo) {
                     return (
-                      <div className="relative rounded-2xl overflow-hidden max-w-[340px] bg-black/90 border border-white/10 shadow-lg">
-                        <video
-                          src={mediaUrl}
-                          controls
-                          playsInline
-                          preload="metadata"
-                          className="w-full max-h-[360px] rounded-2xl object-contain bg-black"
-                        >
-                          Your browser does not support video playback.
-                        </video>
+                      <div className="w-full max-w-[340px]">
+                        <MediaMessageItem
+                          msg={{ ...message, mediaUrl, mediaType: 'video' }}
+                          isSender={isMe}
+                          currentUser={currentUser}
+                        />
                       </div>
                     );
                   }
@@ -955,16 +952,15 @@ export default function MessageBubble({
                     );
                   }
 
-                  // 5. IMAGE VIEWER
+                  // 5. IMAGE VIEWER (WhatsApp-style Tap to Download)
                   return (
-                    <a href={mediaUrl} target="_blank" rel="noopener noreferrer">
-                      <img 
-                        src={mediaUrl} 
-                        alt="Uploaded attachment" 
-                        className="w-full max-h-72 object-cover rounded-lg hover:scale-[1.01] transition-transform duration-200 cursor-pointer"
-                        loading="lazy"
+                    <div className="w-full max-w-[340px]">
+                      <MediaMessageItem
+                        msg={{ ...message, mediaUrl, mediaType: 'image' }}
+                        isSender={isMe}
+                        currentUser={currentUser}
                       />
-                    </a>
+                    </div>
                   );
                 })()
               )}

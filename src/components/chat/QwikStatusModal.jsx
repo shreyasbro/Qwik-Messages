@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { collection, query, where, getDocs, addDoc, doc, setDoc, updateDoc, increment, serverTimestamp, deleteDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { collection, query, where, getDocs, addDoc, doc, setDoc, updateDoc, arrayUnion, increment, serverTimestamp, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { optimizeMediaUrl } from '../../utils/imageOptimizer';
 
@@ -12,6 +12,8 @@ export default function QwikStatusModal({
   onAddStatus 
 }) {
   const [isClosing, setIsClosing] = useState(false);
+  const [liveStatuses, setLiveStatuses] = useState(statuses);
+  const [usersMap, setUsersMap] = useState(usersDirectory);
   const [selectedUserUid, setSelectedUserUid] = useState(null);
   const [currentStoryIndex, setCurrentStoryIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -20,13 +22,136 @@ export default function QwikStatusModal({
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
   const [replySentSuccess, setReplySentSuccess] = useState(false);
+  const [showViewersList, setShowViewersList] = useState(false);
   const timerRef = useRef(null);
+  const viewedStoriesRef = useRef(new Set());
 
-  const isPaused = isManualPaused || isHoldPaused;
+  const isPaused = isManualPaused || isHoldPaused || showViewersList;
 
   const myUid = currentUser?.uid;
   const myName = currentUser?.displayName || currentUser?.name || 'My Status';
   const myAvatar = currentUser?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${myUid || 'me'}`;
+
+  // 1. REALTIME USERS DIRECTORY (FOR INSTANT GOOGLE NAME & AVATAR LOOKUP)
+  useEffect(() => {
+    const unsubUsers = onSnapshot(collection(db, 'users'), (snap) => {
+      const uMap = {};
+      snap.forEach((d) => {
+        uMap[d.id] = { id: d.id, ...d.data() };
+      });
+      setUsersMap((prev) => ({ ...prev, ...uMap }));
+    });
+    return () => unsubUsers();
+  }, []);
+
+  // 2. REALTIME STATUSES WITH DYNAMIC 6h - 48h EXPIRY FILTER
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const unsubStatuses = onSnapshot(collection(db, 'statuses'), (snapshot) => {
+      const now = Date.now();
+
+      // Filter only stories that are still active based on their custom durationHours (6h to 48h)
+      const activeRawStories = snapshot.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((story) => {
+          const durationHours = Number(story.durationHours) || 24;
+          const durationMillis = durationHours * 60 * 60 * 1000;
+
+          const createdTime = story.createdAt?.toMillis
+            ? story.createdAt.toMillis()
+            : new Date(story.createdAt || 0).getTime();
+
+          const expiresAtTime = story.expiresAt?.toMillis
+            ? story.expiresAt.toMillis()
+            : (createdTime ? createdTime + durationMillis : 0);
+
+          // Keep story if current time is before expiration
+          return !createdTime || now < expiresAtTime;
+        });
+
+      setLiveStatuses(activeRawStories);
+    }, (err) => {
+      console.warn("Realtime status sync warning:", err);
+    });
+
+    return () => unsubStatuses();
+  }, [isOpen]);
+
+  // Sync prop statuses when modal opens or prop changes
+  useEffect(() => {
+    if (statuses && statuses.length > 0) {
+      const now = Date.now();
+      const valid = statuses.filter((st) => {
+        const durationHours = Number(st.durationHours) || 24;
+        const durationMillis = durationHours * 60 * 60 * 1000;
+
+        const createdTime = st.createdAt?.toMillis
+          ? st.createdAt.toMillis()
+          : new Date(st.createdAt || 0).getTime();
+
+        const expiresAtTime = st.expiresAt?.toMillis
+          ? st.expiresAt.toMillis()
+          : (createdTime ? createdTime + durationMillis : 0);
+
+        return !createdTime || now < expiresAtTime;
+      });
+      setLiveStatuses(valid);
+    }
+  }, [statuses]);
+
+  // Dynamic Viewer Identity Resolver (Real Google Profile Name & High-Res Avatar)
+  const resolveViewerInfo = (viewer) => {
+    const vUid = typeof viewer === 'string' ? viewer : (viewer.uid || viewer.id);
+    const liveUserData = usersMap[vUid] || usersDirectory[vUid] || {};
+
+    const resolvedName =
+      liveUserData.displayName ||
+      liveUserData.name ||
+      (typeof viewer === 'object' ? viewer.name : null) ||
+      liveUserData.email?.split('@')[0] ||
+      'Friend';
+
+    const resolvedAvatar =
+      liveUserData.photoURL ||
+      liveUserData.avatar ||
+      (typeof viewer === 'object' ? viewer.avatar : null) ||
+      `https://api.dicebear.com/7.x/bottts/svg?seed=${vUid || 'friend'}`;
+
+    return { name: resolvedName, avatar: resolvedAvatar };
+  };
+
+  // Format Relative Time (e.g. 10:45 AM / Just now)
+  const formatStoryTime = (timestamp) => {
+    if (!timestamp) return 'Just now';
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return 'Just now';
+    }
+  };
+
+  // Remaining Lifetime Calculation (6h to 48h countdown)
+  const getRemainingTimeText = (story) => {
+    if (!story) return '';
+    const now = Date.now();
+    const durationHours = Number(story.durationHours) || 24;
+    const durationMillis = durationHours * 60 * 60 * 1000;
+    const createdTime = story.createdAt?.toMillis
+      ? story.createdAt.toMillis()
+      : new Date(story.createdAt || 0).getTime();
+
+    const expiresAt = story.expiresAt?.toMillis
+      ? story.expiresAt.toMillis()
+      : (createdTime ? createdTime + durationMillis : 0);
+
+    if (!expiresAt) return `${durationHours}h timer`;
+    const diffMs = expiresAt - now;
+    if (diffMs <= 0) return 'Expired';
+    const hoursLeft = Math.ceil(diffMs / (1000 * 60 * 60));
+    return `⏳ ${hoursLeft}h left (${durationHours}h)`;
+  };
 
   const handleAnimatedClose = () => {
     if (isClosing) return;
@@ -37,56 +162,144 @@ export default function QwikStatusModal({
     }, 800);
   };
 
-  // Group statuses by user
-  const userMap = {};
-  (statuses || []).forEach((st) => {
-    const uid = st.userId || st.uid;
-    if (!uid) return;
-    const contactProfile = usersDirectory[uid] || {};
+  // Group statuses by user dynamically
+  const userMap = useMemo(() => {
+    const map = {};
+    (liveStatuses || []).forEach((st) => {
+      const uid = st.userId || st.uid;
+      if (!uid) return;
+      const contactProfile = usersMap[uid] || usersDirectory[uid] || {};
 
-    const resolvedName =
-      (uid === myUid ? myName : null) ||
-      (st.userName && st.userName !== 'Contact' && st.userName !== 'User' && st.userName !== 'Anonymous' ? st.userName : null) ||
-      contactProfile.displayName ||
-      contactProfile.name ||
-      st.userDisplayName ||
-      st.userEmail?.split('@')[0] ||
-      contactProfile.email?.split('@')[0] ||
-      'Friend';
+      const resolvedName =
+        (uid === myUid ? myName : null) ||
+        contactProfile.displayName ||
+        contactProfile.name ||
+        (st.userName && st.userName !== 'Contact' && st.userName !== 'User' && st.userName !== 'Anonymous' ? st.userName : null) ||
+        st.userDisplayName ||
+        st.userEmail?.split('@')[0] ||
+        contactProfile.email?.split('@')[0] ||
+        'Friend';
 
-    const resolvedAvatar =
-      (uid === myUid ? myAvatar : null) ||
-      (st.userAvatar && !st.userAvatar.includes('seed=') ? st.userAvatar : null) ||
-      contactProfile.photoURL ||
-      contactProfile.avatar ||
-      st.userPhoto ||
-      st.userAvatar ||
-      `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`;
+      const resolvedAvatar =
+        (uid === myUid ? myAvatar : null) ||
+        contactProfile.photoURL ||
+        contactProfile.avatar ||
+        (st.userAvatar && !st.userAvatar.includes('seed=') ? st.userAvatar : null) ||
+        st.userPhoto ||
+        st.userAvatar ||
+        `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`;
 
-    if (!userMap[uid]) {
-      userMap[uid] = {
-        userId: uid,
-        userName: resolvedName,
-        userAvatar: resolvedAvatar,
-        stories: [],
-      };
-    }
-    userMap[uid].stories.push({
-      id: st.id,
-      type: st.type || (st.mediaUrl || st.imageUrl || st.content?.startsWith('http') ? 'image' : 'text'),
-      text: st.text || st.caption || (st.type === 'text' ? st.content : '') || '',
-      mediaUrl: st.mediaUrl || st.imageUrl || (st.type === 'image' ? st.content : '') || '',
-      bgColor: st.bgColor || '#0f766e',
-      createdAt: st.createdAt,
+      if (!map[uid]) {
+        map[uid] = {
+          userId: uid,
+          userName: resolvedName,
+          userAvatar: resolvedAvatar,
+          stories: [],
+        };
+      }
+      map[uid].stories.push({
+        id: st.id,
+        type: st.type || (st.mediaUrl || st.imageUrl || st.content?.startsWith('http') ? 'image' : 'text'),
+        text: st.text || st.caption || (st.type === 'text' ? st.content : '') || '',
+        mediaUrl: st.mediaUrl || st.imageUrl || (st.type === 'image' ? st.content : '') || '',
+        bgColor: st.bgColor || '#0f766e',
+        createdAt: st.createdAt,
+        viewers: st.viewers || [],
+        viewerUids: st.viewerUids || [],
+        viewCount: st.viewCount || (st.viewers?.length || 0),
+      });
     });
-  });
+
+    // Sort stories inside each group by createdAt
+    Object.values(map).forEach((g) => {
+      g.stories.sort((a, b) => {
+        const tA = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.createdAt || 0).getTime();
+        const tB = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.createdAt || 0).getTime();
+        return tA - tB;
+      });
+    });
+
+    return map;
+  }, [liveStatuses, myUid, myName, myAvatar, usersMap, usersDirectory]);
 
   const myStatusGroup = userMap[myUid] || null;
   const contactGroups = Object.values(userMap).filter((u) => u.userId !== myUid);
 
   const activeGroup = selectedUserUid ? userMap[selectedUserUid] : null;
   const activeStories = activeGroup?.stories || [];
-  const currentStory = activeStories[currentStoryIndex] || null;
+  const baseCurrentStory = activeStories[currentStoryIndex] || null;
+  const [activeStoryLive, setActiveStoryLive] = useState(null);
+  const [subcollectionViews, setSubcollectionViews] = useState([]);
+
+  // 3. TARGET STORY: DUAL-CHANNEL REALTIME SUBSCRIPTIONS (ROOT DOC + SUBCOLLECTION)
+  useEffect(() => {
+    if (!baseCurrentStory?.id) {
+      setActiveStoryLive(null);
+      setSubcollectionViews([]);
+      return;
+    }
+
+    const storyId = baseCurrentStory.id;
+
+    // A. Root Doc Listener
+    const unsubDoc = onSnapshot(doc(db, 'statuses', storyId), (docSnap) => {
+      if (docSnap.exists()) {
+        const dData = docSnap.data();
+        setActiveStoryLive({
+          id: docSnap.id,
+          ...dData,
+          type: dData.type || (dData.mediaUrl || dData.imageUrl || dData.content?.startsWith('http') ? 'image' : 'text'),
+          text: dData.text || dData.caption || (dData.type === 'text' ? dData.content : '') || '',
+          mediaUrl: dData.mediaUrl || dData.imageUrl || (dData.type === 'image' ? dData.content : '') || '',
+          bgColor: dData.bgColor || '#0f766e',
+          viewers: dData.viewers || [],
+          viewerUids: dData.viewerUids || [],
+          viewCount: dData.viewCount || (dData.viewers?.length || 0),
+        });
+      }
+    });
+
+    // B. Realtime Subcollection Views Listener
+    const unsubSubviews = onSnapshot(
+      collection(db, 'statuses', storyId, 'views'),
+      (snap) => {
+        const viewsList = snap.docs.map((d) => ({ uid: d.id, ...d.data() }));
+        console.log(`[StoryView] 👁️ Live subcollection views for ${storyId}:`, viewsList);
+        setSubcollectionViews(viewsList);
+      },
+      (err) => console.warn('[StoryView] Subcollection listener fallback notice:', err.message)
+    );
+
+    return () => {
+      unsubDoc();
+      unsubSubviews();
+    };
+  }, [baseCurrentStory?.id]);
+
+  const currentStory = activeStoryLive?.id === baseCurrentStory?.id ? activeStoryLive : (baseCurrentStory || activeStoryLive);
+
+  // Merge Unique Viewers from both Root Array and Subcollection
+  const mergedViewers = useMemo(() => {
+    const map = new Map();
+
+    // 1. From root doc
+    if (currentStory?.viewers && Array.isArray(currentStory.viewers)) {
+      currentStory.viewers.forEach((v) => {
+        if (v && (v.uid || v.id)) map.set(v.uid || v.id, v);
+      });
+    }
+
+    // 2. From subcollection
+    subcollectionViews.forEach((v) => {
+      if (v && v.uid) {
+        map.set(v.uid, { ...map.get(v.uid), ...v });
+      }
+    });
+
+    return Array.from(map.values());
+  }, [currentStory?.viewers, subcollectionViews]);
+
+  const totalViewCount = Math.max(mergedViewers.length, currentStory?.viewCount || 0);
 
   useEffect(() => {
     if (isOpen) {
@@ -127,6 +340,60 @@ export default function QwikStatusModal({
     };
   }, [isOpen, isClosing, selectedUserUid, currentStoryIndex, isPaused, activeStories.length]);
 
+  // 1. GUARANTEED STORY VIEW REGISTRATION (TRIGGERS AS SOON AS STORY OPENS)
+  useEffect(() => {
+    if (!isOpen || !currentStory?.id || selectedUserUid === myUid || !myUid) return;
+
+    const storyId = currentStory.id;
+    // Prevent duplicate triggers within the same session
+    if (viewedStoriesRef.current.has(storyId)) return;
+
+    const alreadyInDb = currentStory.viewerUids?.includes(myUid) || currentStory.viewers?.some((v) => (typeof v === 'string' ? v === myUid : v.uid === myUid));
+    if (alreadyInDb) {
+      viewedStoriesRef.current.add(storyId);
+      return;
+    }
+
+    viewedStoriesRef.current.add(storyId);
+
+    // Write to Firestore immediately using setDoc with merge: true + dual-channel subcollection write
+    const recordView = async () => {
+      try {
+        console.log('[StoryView] Recording view for story ID:', storyId, 'by UID:', myUid);
+
+        const storyRef = doc(db, 'statuses', storyId);
+        const myProfile = usersMap[myUid] || usersDirectory[myUid] || {};
+        const viewerData = {
+          uid: myUid,
+          name: myProfile.displayName || currentUser?.displayName || currentUser?.name || 'User',
+          avatar: myProfile.photoURL || currentUser?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${myUid}`,
+          viewedAt: new Date().toISOString(),
+        };
+
+        // 1. Atomic array union update on story doc
+        await setDoc(
+          storyRef,
+          {
+            viewerUids: arrayUnion(myUid),
+            viewers: arrayUnion(viewerData),
+            viewCount: increment(1),
+          },
+          { merge: true }
+        );
+
+        // 2. Dual fallback write to subcollection
+        const subViewRef = doc(db, 'statuses', storyId, 'views', myUid);
+        await setDoc(subViewRef, viewerData, { merge: true });
+
+        console.log('[StoryView] ✅ View recorded successfully in Firestore!');
+      } catch (err) {
+        console.error('[StoryView] Error recording story view:', err);
+      }
+    };
+
+    recordView();
+  }, [isOpen, currentStory?.id, selectedUserUid, myUid, currentUser, usersMap, usersDirectory]);
+
   // Preload upcoming story
   useEffect(() => {
     if (!activeStories || activeStories.length === 0) return;
@@ -140,6 +407,7 @@ export default function QwikStatusModal({
 
   const handleNextStory = () => {
     setProgress(0);
+    setShowViewersList(false);
     if (currentStoryIndex < activeStories.length - 1) {
       setCurrentStoryIndex((prev) => prev + 1);
     } else {
@@ -161,20 +429,35 @@ export default function QwikStatusModal({
 
   const handlePrevStory = () => {
     setProgress(0);
+    setShowViewersList(false);
     if (currentStoryIndex > 0) {
       setCurrentStoryIndex((prev) => prev - 1);
     }
   };
 
+  // 6. INSTANT OPTIMISTIC STORY DELETION HANDLER
   const handleDeleteStatus = async (storyId) => {
-    if (!storyId) return;
+    if (!storyId || !myUid) return;
+    if (timerRef.current) clearInterval(timerRef.current);
+
+    // Optimistically calculate remaining stories
+    const updatedStories = activeStories.filter((s) => s.id !== storyId);
+
+    if (updatedStories.length === 0) {
+      // No stories remaining for this user -> close story viewer
+      setSelectedUserUid(null);
+      setCurrentStoryIndex(0);
+      setProgress(0);
+    } else if (currentStoryIndex >= updatedStories.length) {
+      // Move to the last available story
+      setCurrentStoryIndex(updatedStories.length - 1);
+      setProgress(0);
+    } else {
+      setProgress(0);
+    }
+
     try {
       await deleteDoc(doc(db, 'statuses', storyId));
-      if (activeStories.length <= 1) {
-        setSelectedUserUid(null);
-      } else {
-        handleNextStory();
-      }
     } catch (err) {
       console.error('Delete status error:', err);
     }
@@ -285,13 +568,18 @@ export default function QwikStatusModal({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
+      const tag = e.target.tagName?.toUpperCase();
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+      if (isInput) return; // Allow spacebar & full typing freedom inside text inputs
+
       if (e.key === 'Escape') {
         if (selectedUserUid) setSelectedUserUid(null);
         else handleAnimatedClose();
-      }
-      if (e.key === 'ArrowRight') handleNextStory();
-      if (e.key === 'ArrowLeft') handlePrevStory();
-      if (e.key === ' ') {
+      } else if (e.key === 'ArrowRight') {
+        handleNextStory();
+      } else if (e.key === 'ArrowLeft') {
+        handlePrevStory();
+      } else if (e.code === 'Space' || e.key === ' ') {
         e.preventDefault();
         setIsHoldPaused(false);
         setIsManualPaused((p) => !p);
@@ -487,17 +775,21 @@ export default function QwikStatusModal({
                 </button>
 
                 <img
-                  src={activeGroup?.userAvatar}
+                  src={activeGroup?.userAvatar || 'https://api.dicebear.com/7.x/bottts/svg?seed=user'}
                   alt=""
                   className="w-9 h-9 rounded-full object-cover border-2 border-teal-400 shadow-md"
                 />
                 <div>
-                  <h4 className="text-xs font-bold truncate max-w-[140px]">
-                    {activeGroup?.userName}
+                  <h4 className="text-xs font-black truncate max-w-[140px]">
+                    {selectedUserUid === myUid ? 'Your Story' : activeGroup?.userName}
                   </h4>
-                  <span className="text-[10px] text-gray-400 opacity-90">
-                    {currentStoryIndex + 1} of {activeStories.length}
-                  </span>
+                  <div className="flex items-center gap-1.5 text-[10px] text-teal-300 font-bold">
+                    <span>{currentStoryIndex + 1} of {activeStories.length}</span>
+                    <span className="text-gray-400 font-normal">•</span>
+                    <span className="text-gray-400 font-medium">{formatStoryTime(currentStory?.createdAt)}</span>
+                    <span className="text-gray-400 font-normal">•</span>
+                    <span className="text-teal-400 font-semibold">{getRemainingTimeText(currentStory)}</span>
+                  </div>
                 </div>
               </div>
 
@@ -607,8 +899,26 @@ export default function QwikStatusModal({
               />
             </div>
 
-            {/* Bottom Reply Bar */}
-            {selectedUserUid !== myUid && (
+            {/* Bottom Actions: Owner Views Bar OR Contact Reply Bar */}
+            {selectedUserUid === myUid ? (
+              <div 
+                className="p-3.5 bg-gray-950/90 border-t border-gray-800 z-50 flex items-center justify-center cursor-pointer hover:bg-gray-900 transition-colors"
+                onClick={() => setShowViewersList((prev) => !prev)}
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2 text-teal-400 text-xs font-black tracking-wide">
+                  <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                  <span>{totalViewCount} {totalViewCount === 1 ? 'view' : 'views'}</span>
+                  <svg className={`w-3.5 h-3.5 stroke-[2.5] transition-transform ${showViewersList ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+                  </svg>
+                </div>
+              </div>
+            ) : (
               <form 
                 onSubmit={handleSendStatusReply}
                 className="p-3 bg-gray-950 border-t border-gray-800 z-50 flex items-center gap-2 relative"
@@ -627,6 +937,8 @@ export default function QwikStatusModal({
                   placeholder={`Reply to ${activeGroup?.userName || 'status'}...`}
                   value={replyText}
                   onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  onKeyUp={(e) => e.stopPropagation()}
                   className="flex-1 px-4 py-2 bg-gray-900 border border-gray-800 rounded-2xl text-xs text-white placeholder-gray-500 outline-none focus:border-teal-500 transition-colors"
                 />
 
@@ -645,6 +957,63 @@ export default function QwikStatusModal({
                   </svg>
                 </button>
               </form>
+            )}
+
+            {/* OWNER VIEWER DRAWER SHEET */}
+            {selectedUserUid === myUid && showViewersList && (
+              <div 
+                className="absolute inset-x-0 bottom-0 max-h-[55%] bg-gray-950/95 border-t border-gray-800 rounded-t-3xl z-50 p-4 flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200"
+                onMouseDown={(e) => e.stopPropagation()}
+                onTouchStart={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+                  <h5 className="text-xs font-black text-white flex items-center gap-2">
+                    <span>Viewed by</span>
+                    <span className="px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-400 text-[10px]">
+                      {totalViewCount}
+                    </span>
+                  </h5>
+                  <button
+                    type="button"
+                    onClick={() => setShowViewersList(false)}
+                    className="text-gray-400 hover:text-white text-xs font-bold p-1 cursor-pointer"
+                  >
+                    Done
+                  </button>
+                </div>
+
+                {/* Viewers List */}
+                <div className="flex-1 overflow-y-auto divide-y divide-gray-900/60 py-2 space-y-1">
+                  {mergedViewers.length > 0 ? (
+                    mergedViewers.map((viewer, vIdx) => {
+                      const { name: resolvedName, avatar: resolvedAvatar } = resolveViewerInfo(viewer);
+                      const viewedAtStr = typeof viewer === 'object' && viewer.viewedAt
+                        ? new Date(viewer.viewedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : 'Viewed';
+
+                      return (
+                        <div key={vIdx} className="flex items-center justify-between py-2">
+                          <div className="flex items-center gap-2.5">
+                            <img
+                              src={resolvedAvatar}
+                              alt={resolvedName}
+                              className="w-8 h-8 rounded-full object-cover border border-gray-800"
+                            />
+                            <span className="text-xs font-bold text-white truncate max-w-[170px]">{resolvedName}</span>
+                          </div>
+                          <span className="text-[10px] text-gray-500 font-medium shrink-0">
+                            {viewedAtStr}
+                          </span>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="py-6 text-center text-xs text-gray-500 font-semibold">
+                      No views yet
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         ) : (

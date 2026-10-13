@@ -6,7 +6,7 @@ import { userService } from '../../services/userService';
 import DangerZone from './DangerZone';
 import { useCall } from '../../context/CallContext';
 import { useRecipient } from '../../hooks/useRecipient';
-import { safeString } from '../../utils/safeRender';
+import { safeString, getVisibleAvatar, getVisibleAbout, shouldShowBlueTicks, shouldShowLastSeen, calculateExpiration } from '../../utils/safeRender';
 import MessageBubble from './MessageBubble';
 import PresenceBadge from '../profile/PresenceBadge';
 import EmojiPicker, { Theme, EmojiStyle } from 'emoji-picker-react';
@@ -22,6 +22,7 @@ import ForwardModal from './ForwardModal';
 import GiphyPicker from './GiphyPicker';
 import VoiceRecorderBar from './VoiceRecorderBar';
 import DevelopmentModal from './DevelopmentModal';
+import FeatureNoticeModal from '../FeatureNoticeModal';
 import ChatToast from '../ChatToast';
 
 export default function ChatWindow() {
@@ -45,6 +46,7 @@ export default function ChatWindow() {
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showPollModal, setShowPollModal] = useState(false);
   const [showDevModal, setShowDevModal] = useState(false);
+  const [showVoiceNotice, setShowVoiceNotice] = useState(false);
   const [pinnedMessage, setPinnedMessage] = useState(null);
   const [mediaTab, setMediaTab] = useState('photos'); // 'photos' | 'videos' | 'docs'
   const [allMediaItems, setAllMediaItems] = useState({ photos: [], videos: [], docs: [] });
@@ -729,7 +731,10 @@ export default function ChatWindow() {
     };
     clearRoomUnread();
 
-    // 2. Mark unread message documents as read
+    // 2. Mark unread message documents as read (ONLY if user has read receipts enabled)
+    const myReceiptsEnabled = currentUser?.privacySettings?.readReceipts !== false;
+    if (!myReceiptsEnabled) return;
+
     if (!messages || messages.length === 0) return;
     const unread = messages.filter(
       (m) => m.senderId !== currentUser.uid && m.status !== 'read'
@@ -747,7 +752,7 @@ export default function ChatWindow() {
         console.error("Error updating read receipt status:", err);
       }
     });
-  }, [messages, activeChat, currentUser?.uid]);
+  }, [messages, activeChat, currentUser?.uid, currentUser?.privacySettings?.readReceipts]);
 
   useEffect(() => {
     setNewGroupName(activeChat?.groupName || '');
@@ -786,16 +791,22 @@ export default function ChatWindow() {
 
   const { recipient } = useRecipient(isGroupChat ? [] : activeChat?.participants, currentUser?.uid);
   
+  const targetUserObj = recipient || activeChat?.recipient || usersDirectory[activeChat?.recipient?.uid || activeChat?.recipientUid];
+
   const recipientName = isGroupChat 
     ? (activeChat.groupName || 'Group Chat') 
-    : (recipient?.displayName || activeChat?.recipient?.displayName || 'User');
+    : (targetUserObj?.displayName || 'User');
     
   const avatarSrc = isGroupChat 
     ? (activeChat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(recipientName)}&background=0d9488&color=fff&bold=true`) 
-    : (recipient?.photoURL || userService.resolveAvatar(activeChat?.recipient));
+    : getVisibleAvatar(targetUserObj, currentUser?.uid);
 
-  // Filter messages not deleted for current user
-  const safeMessages = messages.filter(m => !m.deletedFor?.includes(currentUser?.uid));
+  // Filter messages not deleted for current user AND filter out expired disappearing messages
+  const safeMessages = messages.filter(m => {
+    if (m.deletedFor?.includes(currentUser?.uid)) return false;
+    if (m.expiresAt && Number(m.expiresAt) <= Date.now()) return false;
+    return true;
+  });
 
   // Deletion permission calculation
   const selectedObjs = safeMessages.filter(m => selectedMessageIds.includes(m.id));
@@ -832,6 +843,10 @@ export default function ChatWindow() {
     console.log(`🚀 Attempting to send message to room: [${targetChatId}] as sender: [${senderId}]`);
     setInputText(''); // Optimistic UI clear
 
+    // Calculate disappearing message expiration if configured
+    const timerSetting = activeChat?.disappearingTimer || currentUser?.privacySettings?.disappearingDefault || 'off';
+    const expiresAt = calculateExpiration(timerSetting);
+
     try {
       if (editingMessage) {
         await chatService.editMessage(String(targetChatId), String(editingMessage.id), trimmedText);
@@ -848,7 +863,8 @@ export default function ChatWindow() {
           timestamp: serverTimestamp(),
           deletedFor: [],
           isEdited: false,
-          status: 'sent'
+          status: 'sent',
+          ...(expiresAt && { expiresAt })
         };
         if (replyingTo) {
           msgPayload.replyTo = {
@@ -1181,8 +1197,8 @@ export default function ChatWindow() {
                 }}
                 className="w-full h-full rounded-full object-cover border border-slate-800 group-hover:border-teal-500 transition-colors cursor-pointer hover:scale-105 transition-transform" 
               />
-              {!isGroupChat && (
-                <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
+              {!isGroupChat && shouldShowLastSeen(targetUserObj, currentUser?.uid) && (
+                <PresenceBadge status={targetUserObj?.presenceStatus || (targetUserObj?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
               )}
             </div>
 
@@ -1203,7 +1219,9 @@ export default function ChatWindow() {
                 <p className="text-[10px] text-slate-300 font-medium truncate">
                   {isGroupChat 
                     ? `${activeChat.participants?.length || 0} members` 
-                    : "Direct Secure Connection"}
+                    : shouldShowLastSeen(targetUserObj, currentUser?.uid) 
+                      ? (targetUserObj?.isOnline ? '🟢 Online' : 'Direct Secure Connection') 
+                      : 'Qwik Contact'}
                 </p>
               )}
             </div>
@@ -1401,7 +1419,15 @@ export default function ChatWindow() {
                   );
                   const firstUnreadIndex = myUnreadCount > 0 ? safeMessages.length - myUnreadCount : -1;
 
-                  return safeMessages.map((m, index) => {
+                  return safeMessages
+                    .filter((m) => {
+                      // Filter out ghost empty forwarded text-only messages
+                      const isGhostForward =
+                        (m.text?.trim() === 'Forwarded' || m.text?.trim() === '↗ Forwarded') &&
+                        !m.mediaUrl && !m.fileUrl;
+                      return !isGhostForward;
+                    })
+                    .map((m, index) => {
                     const currentLabel = getQwikDateLabel(m.timestampMillis);
                     const prevLabel = index > 0 ? getQwikDateLabel(safeMessages[index - 1].timestampMillis) : null;
                     const showDateHeader = currentLabel !== prevLabel;
@@ -1447,6 +1473,7 @@ export default function ChatWindow() {
                             isGroup={isGroupChat}
                             chatId={activeChat?.id || activeChat?.chatId || activeChat?.roomId}
                             onShowToast={showToast}
+                            targetUser={targetUserObj}
                           />
                         </div>
                       </React.Fragment>
@@ -1733,11 +1760,11 @@ export default function ChatWindow() {
                         {inputText.trim() || editingMessage ? (
                           <button
                             type="submit"
-                            className="bg-teal-500 hover:bg-teal-400 text-slate-950 p-2.5 rounded-2xl transition-all flex items-center justify-center shadow-lg shadow-teal-500/20 active:scale-95 cursor-pointer shrink-0"
+                            className="bg-gradient-to-r from-teal-400 via-emerald-400 to-teal-500 hover:from-teal-300 hover:to-emerald-400 text-slate-950 p-2.5 rounded-2xl transition-all duration-150 ease-spring flex items-center justify-center shadow-[0_0_20px_rgba(45,212,191,0.4)] hover:scale-105 active:scale-90 cursor-pointer shrink-0"
                             title={editingMessage ? 'Save Message' : 'Send Message'}
                           >
                             <svg 
-                              className="w-4 h-4 transform rotate-45 -translate-x-0.5 stroke-[2.5]" 
+                              className="w-4 h-4 transform rotate-45 -translate-x-0.5 stroke-[2.5] transition-transform duration-150 group-hover:rotate-[50deg]" 
                               fill="none" 
                               stroke="currentColor" 
                               viewBox="0 0 24 24" 
@@ -1752,9 +1779,9 @@ export default function ChatWindow() {
                         ) : (
                           <button 
                             type="button"
-                            onClick={() => setShowDevModal(true)}
-                            className="p-2.5 rounded-2xl bg-gray-900/90 hover:bg-gray-800 border border-gray-800 flex items-center justify-center text-gray-400 hover:text-teal-400 transition-colors cursor-pointer shrink-0"
-                            title="Record Voice Note"
+                            onClick={() => setShowVoiceNotice(true)}
+                            className="p-2.5 rounded-2xl bg-gray-900/90 hover:bg-gray-800 border border-gray-800 hover:border-teal-500/40 flex items-center justify-center text-gray-400 hover:text-teal-400 transition-all duration-150 ease-spring hover:scale-105 active:scale-90 cursor-pointer shrink-0"
+                            title="Voice messages (Testing)"
                           >
                             <svg className="w-4 h-4 stroke-[2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -2137,7 +2164,7 @@ export default function ChatWindow() {
                   <div>
                     <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Bio</p>
                     <p className="text-sm text-slate-300 font-medium leading-relaxed">
-                      {recipient?.bio || "Hey there! I am using Qwik Messages."}
+                      {getVisibleAbout(targetUserObj, currentUser?.uid) || <span className="italic text-slate-500">No bio shared</span>}
                     </p>
                   </div>
 
@@ -2438,6 +2465,12 @@ export default function ChatWindow() {
       <DevelopmentModal
         isOpen={showDevModal}
         onClose={() => setShowDevModal(false)}
+      />
+
+      {/* Feature In Testing / Beta Notice Modal */}
+      <FeatureNoticeModal
+        isOpen={showVoiceNotice}
+        onClose={() => setShowVoiceNotice(false)}
       />
 
       {/* Action Feedback Toast */}

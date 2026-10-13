@@ -33,7 +33,10 @@ export function AuthProvider({ children }) {
     const unsubscribeProfile = onSnapshot(userDocRef, async (snap) => {
       if (snap.exists()) {
         const data = snap.data();
-        setUserProfile(data);
+        setUserProfile((prev) => {
+          if (JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          return data;
+        });
         
         // Auto-migrate if user doesn't have a username
         if (!data.username) {
@@ -61,8 +64,8 @@ export function AuthProvider({ children }) {
       setLoading(false);
     });
 
-    return unsubscribeProfile;
-  }, [currentUser]);
+    return () => unsubscribeProfile();
+  }, [currentUser?.uid]);
 
   // ⚡ DETECT DUAL ACCOUNTS
   useEffect(() => {

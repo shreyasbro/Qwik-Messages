@@ -33,3 +33,97 @@ export const safeString = (val, fallback = '') => {
   }
   return fallback;
 };
+
+/**
+ * Resolves user profile photo based on privacy settings
+ */
+export const getVisibleAvatar = (user, viewerUid, viewerContacts = []) => {
+  if (!user) return 'https://api.dicebear.com/7.x/bottts/svg?seed=default';
+  
+  // Own photo is always visible to oneself
+  if (user.uid === viewerUid) return user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`;
+
+  const setting = user.privacySettings?.profilePhoto || 'everyone';
+  const allowed = user.privacySettings?.profilePhotoAllowed || [];
+
+  if (setting === 'nobody') {
+    return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+  }
+
+  if (setting === 'contacts') {
+    const isContact = viewerContacts.includes(user.uid) || (user.contacts || []).includes(viewerUid);
+    if (!isContact) {
+      return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+    }
+  }
+
+  if (setting === 'specific') {
+    if (!allowed.includes(viewerUid)) {
+      return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+    }
+  }
+
+  return user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+};
+
+/**
+ * Resolves user About info based on privacy settings
+ */
+export const getVisibleAbout = (user, viewerUid, viewerContacts = []) => {
+  if (!user) return '';
+  if (user.uid === viewerUid) return user.about || user.statusBio || 'Hey there! I am using Qwik Messages.';
+
+  const setting = user.privacySettings?.about || 'everyone';
+  const allowed = user.privacySettings?.aboutAllowed || [];
+
+  if (setting === 'nobody') return '';
+
+  if (setting === 'contacts') {
+    const isContact = viewerContacts.includes(user.uid) || (user.contacts || []).includes(viewerUid);
+    if (!isContact) return '';
+  }
+
+  if (setting === 'specific') {
+    if (!allowed.includes(viewerUid)) return '';
+  }
+
+  return user.about || user.statusBio || 'Hey there! I am using Qwik Messages.';
+};
+
+/**
+ * Determines whether to display blue ticks (read receipts)
+ */
+export const shouldShowBlueTicks = (currentUser, targetUser) => {
+  const myReceipts = currentUser?.privacySettings?.readReceipts !== false;
+  const theirReceipts = targetUser?.privacySettings?.readReceipts !== false;
+  return myReceipts && theirReceipts;
+};
+
+/**
+ * Determines whether to display Last Seen / Online status
+ */
+export const shouldShowLastSeen = (user, viewerUid, viewerContacts = []) => {
+  if (!user) return false;
+  if (user.uid === viewerUid) return true;
+
+  const setting = user.privacySettings?.lastSeen || 'everyone';
+  const allowed = user.privacySettings?.lastSeenAllowed || [];
+
+  if (setting === 'nobody') return false;
+  if (setting === 'specific') {
+    return allowed.includes(viewerUid);
+  }
+  
+  return true;
+};
+
+/**
+ * Calculates expiration timestamp for disappearing messages
+ */
+export const calculateExpiration = (timerSetting) => {
+  const now = Date.now();
+  if (timerSetting === '24h') return now + 24 * 60 * 60 * 1000;
+  if (timerSetting === '7d') return now + 7 * 24 * 60 * 60 * 1000;
+  if (timerSetting === '90d') return now + 90 * 24 * 60 * 60 * 1000;
+  return null;
+};

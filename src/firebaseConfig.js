@@ -1,6 +1,6 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import { getDatabase } from 'firebase/database';
 import { getStorage } from 'firebase/storage';
 
@@ -16,10 +16,13 @@ const firebaseConfig = {
 };
 
 // Prevent duplicate initialization during Vite Hot Module Replacement (HMR)
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Initialize Firestore with Force Long-Polling (Fixes Proxy & Connection Drops)
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+});
 export const rtdb = getDatabase(app);
 export const storage = getStorage(app);
 

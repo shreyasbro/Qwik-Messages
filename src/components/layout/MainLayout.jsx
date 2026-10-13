@@ -5,6 +5,8 @@ import { useCall } from '../../context/CallContext';
 import { useAuth } from '../../context/AuthContext';
 import { useChat } from '../../context/ChatContext';
 import JitsiCallWindow from '../calling/JitsiCallWindow';
+import SettingsModal from '../SettingsModal';
+import ChangelogUpdatesModal from '../ChangelogUpdatesModal';
 
 function IncomingCallPanel({ incomingCall, onDecline, onAccept }) {
   const [callStatus, setCallStatus] = useState('ringing'); // 'ringing' | 'busy'
@@ -79,15 +81,24 @@ function IncomingCallPanel({ incomingCall, onDecline, onAccept }) {
 export default function MainLayout() {
   const { incomingCall, activeCall, acceptCall, declineCall, endCall } = useCall();
   const { currentUser } = useAuth();
-
   const { activeMobileTab } = useChat();
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  // 1. Open Changelog Modal automatically on startup if not explicitly dismissed
+  const [showChangelogModal, setShowChangelogModal] = useState(() => {
+    const hasDismissed = localStorage.getItem('qwik_seen_changelog_v2.4');
+    return !hasDismissed;
+  });
 
   return (
     <div className="h-[100dvh] w-full flex bg-slate-950 overflow-hidden fixed inset-0">
       
       {/* Sidebar - left */}
       <div className={`w-full md:w-[350px] lg:w-[400px] h-full shrink-0 ${activeMobileTab === 'sidebar' ? 'block' : 'hidden md:block'}`}>
-        <ChatSidebar />
+        <ChatSidebar 
+          onOpenSettings={() => setShowSettingsModal(true)} 
+          onOpenUpdates={() => setShowChangelogModal(true)}
+        />
       </div>
 
       {/* Conversation Workspace - right */}
@@ -97,7 +108,6 @@ export default function MainLayout() {
 
       {/* Global Incoming Call Overlay */}
       {incomingCall && (() => {
-        // We use an IIFE/Inline Component to track timer state specifically for the active incomingCall doc
         return <IncomingCallPanel 
           incomingCall={incomingCall} 
           onDecline={() => declineCall(incomingCall.callId)} 
@@ -113,6 +123,22 @@ export default function MainLayout() {
           onClose={() => endCall(activeCall.callId)}
         />
       )}
+
+      {/* Root-Level App Settings & Privacy Modal (Shielded from sidebar re-renders) */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        currentUser={currentUser}
+      />
+
+      {/* Guaranteed Scrollable Updates & Roadmap Modal */}
+      <ChangelogUpdatesModal
+        isOpen={showChangelogModal}
+        onClose={() => {
+          localStorage.setItem('qwik_seen_changelog_v2.4', 'true');
+          setShowChangelogModal(false);
+        }}
+      />
 
     </div>
   );

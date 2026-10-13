@@ -251,6 +251,7 @@ export default function StatusUploadModal({ currentUser, onClose }) {
                 <textarea
                   value={textContent}
                   onChange={(e) => setTextContent(e.target.value)}
+                  onKeyDown={(e) => e.stopPropagation()}
                   placeholder="Type a story..."
                   maxLength={250}
                   className="w-full bg-transparent text-white font-extrabold text-center text-xl placeholder-white/60 outline-none resize-none drop-shadow z-10"
@@ -389,6 +390,7 @@ export default function StatusUploadModal({ currentUser, onClose }) {
                 type="text"
                 value={caption}
                 onChange={(e) => setCaption(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
                 placeholder="Add a caption..."
                 className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm outline-none focus:border-teal-500"
               />

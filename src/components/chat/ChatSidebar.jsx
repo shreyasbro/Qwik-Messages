@@ -4,7 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { userService } from '../../services/userService';
 import { authService } from '../../services/authService';
 import { useRecipient } from '../../hooks/useRecipient';
-import { safeString } from '../../utils/safeRender';
+import { safeString, getVisibleAvatar, shouldShowLastSeen } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
 import ProfileEditorModal from '../profile/ProfileEditorModal';
 import PresenceBadge from '../profile/PresenceBadge';
@@ -203,7 +203,7 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   const chatName = isGroup ? chat.groupName : (recipient?.displayName || 'Loading...');
   const avatarSrc = isGroup 
     ? (chat.groupAvatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(chatName)}&background=0d9488&color=fff&bold=true`) 
-    : (recipient?.photoURL || userService.resolveAvatar({ displayName: chatName }));
+    : getVisibleAvatar(recipient, currentUser?.uid);
     
   const activeTargetId = activeChat?.id || activeChat?.chatId || activeChat?.roomId;
   const currentChatId = chat.id || chat.chatId || chat.roomId;
@@ -286,16 +286,21 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
   return (
     <div
       onClick={handleOpenChat}
-      className={`relative flex items-center gap-3.5 px-3.5 py-3 mx-1 mb-1 rounded-2xl cursor-pointer transition-all duration-300 ease-in-out border-l-4 border ${
+      className={`group relative flex items-center gap-3.5 px-3.5 py-3 mx-1 mb-1 rounded-2xl cursor-pointer transition-all duration-200 ease-spring select-none ${
         isActive 
-          ? 'bg-teal-500/10 border-teal-500/40 border-l-teal-400 shadow-lg shadow-black/25' 
+          ? 'bg-gradient-to-r from-teal-500/15 via-teal-500/10 to-transparent border border-teal-500/40 shadow-lg shadow-teal-950/40 translate-x-0.5' 
           : unreadCount > 0
-          ? 'bg-teal-500/[0.04] border-slate-800/80 border-l-teal-400 hover:bg-slate-800/60 shadow-sm'
-          : 'bg-transparent border-transparent hover:bg-slate-800/40 hover:border-slate-700/50'
+          ? 'bg-teal-500/[0.06] border border-teal-500/30 hover:bg-slate-800/60 hover:border-teal-500/40 hover:translate-x-0.5 shadow-sm'
+          : 'bg-transparent border border-transparent hover:bg-slate-800/40 hover:border-slate-700/50 hover:translate-x-0.5'
       }`}
     >
-      {/* 1. AVATAR WITH GLOWING RING & PULSE DOT */}
-      <div className="relative shrink-0 select-none">
+      {/* Active Glowing Indicator Ribbon */}
+      {isActive && (
+        <div className="absolute left-0 top-3 bottom-3 w-1 bg-gradient-to-b from-teal-400 to-emerald-500 rounded-r-full shadow-[0_0_12px_rgba(45,212,191,0.8)]" />
+      )}
+
+      {/* 1. AVATAR WITH GLOWING HALO & SPRING SCALING */}
+      <div className="relative shrink-0 select-none transition-transform duration-200 group-hover:scale-105 group-active:scale-95">
         <img 
           src={avatarSrc} 
           alt={safeString(chatName)} 
@@ -304,10 +309,12 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
             e.stopPropagation();
             setPreviewImage(avatarSrc);
           }}
-          className={`w-11 h-11 rounded-full object-cover cursor-pointer hover:brightness-90 transition-all active:scale-95 ${
-            unreadCount > 0 
+          className={`w-11 h-11 rounded-2xl object-cover cursor-pointer transition-all duration-200 ${
+            isActive 
+              ? 'border-2 border-teal-400 shadow-[0_0_15px_rgba(45,212,191,0.4)]'
+              : unreadCount > 0 
               ? 'ring-2 ring-teal-400 ring-offset-2 ring-offset-slate-950 shadow-md shadow-teal-500/20' 
-              : 'border border-slate-700/60'
+              : 'border border-slate-700/60 group-hover:border-teal-500/50'
           }`} 
         />
         {unreadCount > 0 ? (
@@ -316,7 +323,7 @@ function ChatListItem({ chat, currentUser, activeChat, setActiveChat, setPreview
           <span 
             className="absolute bottom-0 right-0 w-3.5 h-3.5 border-2 border-slate-950 rounded-full bg-teal-400 flex items-center justify-center shadow-[0_0_10px_rgba(45,212,191,0.7)] animate-pulse z-10"
           />
-        ) : !isGroup ? (
+        ) : (!isGroup && shouldShowLastSeen(recipient, currentUser?.uid)) ? (
           <PresenceBadge status={recipient?.presenceStatus || (recipient?.isOnline ? 'online' : 'idle')} className="absolute bottom-0.5 right-0.5 z-10" size="w-2.5 h-2.5" />
         ) : null}
       </div>
@@ -391,20 +398,35 @@ function ContactSelectorItem({ chat, currentUser, activeSpecificModal, specificC
   );
 }
 
-export default function ChatSidebar() {
+export default function ChatSidebar({ onOpenSettings, onOpenUpdates }) {
   const { chats, activeChat, setActiveChat, chatsLoading, setPreviewImage } = useChat();
   const { currentUser, userProfile } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isGroupCreateOpen, setIsGroupCreateOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsView, setSettingsView] = useState("main"); // 'main' | 'privacy'
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [isStatusViewerOpen, setIsStatusViewerOpen] = useState(false);
   const [statuses, setStatuses] = useState([]);
   const [allUsersList, setAllUsersList] = useState([]);
   const [readChatIds, setReadChatIds] = useState(new Set());
+
+  // 1. Session State: Track if updates button was clicked in this session
+  const [hasDismissedUpdates, setHasDismissedUpdates] = useState(() => {
+    return sessionStorage.getItem('qwik_updates_session_seen') === 'true';
+  });
+
+  // Handler: Open modal & dismiss button until app restart
+  const handleUpdatesClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (onOpenUpdates) onOpenUpdates();
+
+    // Hide button for the rest of this session
+    setHasDismissedUpdates(true);
+    sessionStorage.setItem('qwik_updates_session_seen', 'true');
+  };
 
   // Real-time directory of all registered users (for instant 1-on-1 name & Google avatar resolution)
   React.useEffect(() => {
@@ -719,13 +741,26 @@ export default function ChatSidebar() {
         })()}
 
         {/* Action Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* 🚀 GLOWING WHAT'S NEW UPDATES BUTTON (HIDES AFTER 1ST CLICK UNTIL RESTART) */}
+          {!hasDismissedUpdates && (
+            <button
+              type="button"
+              onClick={handleUpdatesClick}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-teal-950/60 hover:bg-teal-900/60 text-teal-300 border border-teal-500/40 text-[11px] font-black transition-all hover:scale-105 active:scale-95 shadow-md shadow-teal-500/10 cursor-pointer animate-in fade-in zoom-in-95 duration-200"
+              title="View App Updates & Roadmap (v2.4)"
+            >
+              <span>🚀</span>
+              <span className="hidden sm:inline font-bold">Updates</span>
+            </button>
+          )}
+
           {/* ⚙️ SETTINGS BUTTON */}
           <button
             type="button"
-            onClick={() => setIsSettingsOpen(true)}
+            onClick={onOpenSettings}
             title="Settings"
-            className="p-2 text-white hover:text-teal-400 bg-white/5 hover:bg-white/10 border border-white/15 hover:border-white/30 rounded-xl transition-all duration-200 shadow-sm flex items-center justify-center group"
+            className="p-2 text-white hover:text-teal-400 bg-white/5 hover:bg-white/10 border border-white/15 hover:border-white/30 rounded-xl transition-all duration-200 shadow-sm flex items-center justify-center group cursor-pointer"
           >
             <svg 
               className="w-4 h-4 text-white group-hover:text-teal-400 transition-colors" 
@@ -814,9 +849,11 @@ export default function ChatSidebar() {
           </svg>
           <span className="text-xs font-semibold tracking-wide">Status</span>
 
-          {/* Notification Dot */}
+          {/* Active Story Counter Badge */}
           {statuses.length > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-teal-400 border border-gray-950 animate-pulse" />
+            <span className="px-1.5 py-0.2 rounded-full bg-teal-400 text-gray-950 text-[10px] font-black shadow-sm">
+              {statuses.length}
+            </span>
           )}
         </button>
 
@@ -1139,249 +1176,7 @@ export default function ChatSidebar() {
         onAddStatus={() => setShowUploadModal(true)}
       />
 
-      {/* ⚙️ QWIK SETTINGS DRAWER (Slides in from left) */}
-      {isSettingsOpen && (
-        <div className="fixed inset-y-0 left-0 z-50 w-80 md:w-96 bg-slate-950 border-r border-slate-800/80 backdrop-blur-3xl flex flex-col shadow-2xl animate-drawer-slide-in select-none">
-          
-          {/* Header */}
-          <div className="p-5 border-b border-slate-800/80 flex items-center justify-between bg-slate-900/40">
-            <div className="flex items-center gap-2.5">
-              <span className="text-teal-400 text-lg">⚙️</span>
-              <h2 className="text-base font-black uppercase tracking-wider text-white">Settings</h2>
-            </div>
-            <button 
-              type="button"
-              onClick={handleCloseSettings}
-              className="text-slate-400 hover:text-white p-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 transition-colors text-sm cursor-pointer"
-            >
-              ✕
-            </button>
-          </div>
 
-          {/* CONDITIONAL RENDERING BASED ON ACTIVE VIEW */}
-          {settingsView === "main" ? (
-            /* Settings List (Qwik Style Menu) */
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 text-left">
-              
-              {/* 1. PRIVACY SETTINGS */}
-              <button
-                type="button"
-                onClick={() => triggerComingSoon('Privacy Settings')}
-                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
-                    🔒
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
-                        Privacy Settings
-                      </span>
-                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
-                        Soon
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">Read receipts, Last seen, Profile photo</p>
-                  </div>
-                </div>
-                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-
-              {/* 2. CHANGE EMAIL ADDRESS */}
-              <button
-                type="button"
-                onClick={() => triggerComingSoon('Change Email Address')}
-                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
-                    ✉️
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
-                        Change Email Address
-                      </span>
-                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
-                        Soon
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">Update primary security credentials</p>
-                  </div>
-                </div>
-                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-
-              {/* 3. ADD OR LINK ACCOUNT */}
-              <button
-                type="button"
-                onClick={() => triggerComingSoon('Multi-Account Linking')}
-                className="w-full flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/90 hover:border-teal-500/50 hover:bg-slate-800/40 transition-all text-left group cursor-pointer"
-              >
-                <div className="flex items-center gap-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-center text-teal-400 shrink-0 group-hover:scale-105 transition-transform">
-                    👥
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white group-hover:text-teal-300 transition-colors">
-                        Add or Link Account
-                      </span>
-                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300">
-                        Soon
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-0.5">Switch between multi-user profiles</p>
-                  </div>
-                </div>
-                <svg className="w-5 h-5 text-slate-500 group-hover:text-teal-400 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-
-              {/* ⚡ 4. Support & FAQ Accordion Section */}
-              <div 
-                onClick={() => setSettingsView("support")}
-                className="p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800/60 hover:border-teal-500/50 transition-all cursor-pointer group"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-lg">ℹ️</span>
-                    <div>
-                      <p className="text-xs font-bold text-white group-hover:text-teal-400 transition-colors">Support & FAQ</p>
-                      <p className="text-[11px] text-slate-400">Help docs, call guides & support accordion</p>
-                    </div>
-                  </div>
-                  <span className="text-slate-500 group-hover:text-white text-xs">➔</span>
-                </div>
-              </div>
-
-              {/* 5. About App & Creator */}
-              <div className="mt-6 p-4 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950 border border-slate-800 space-y-2 text-center">
-                <h3 className="text-xs font-black uppercase tracking-widest text-teal-400">Qwik Messages Enterprise</h3>
-                <p className="text-[11px] text-slate-400 font-medium">Version 3.0.0</p>
-                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-center gap-1.5 text-xs text-slate-300 font-semibold">
-                  <span>Architected by <span className="text-white font-bold">Shreyas Thakur</span></span>
-                  <span className="text-sm" title="India">🇮🇳</span>
-                </div>
-              </div>
-
-            </div>
-          ) : settingsView === "support" ? (
-            /* --- SUPPORT & FAQ ACCORDION SUB-MENU --- */
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-left animate-fade-in">
-              {/* Back button */}
-              <button 
-                type="button"
-                onClick={() => setSettingsView("main")}
-                className="flex items-center gap-2 text-xs font-bold text-teal-400 hover:text-white transition-colors cursor-pointer mb-2"
-              >
-                <span>← Back to Settings</span>
-              </button>
-              
-              <SupportFAQ />
-            </div>
-          ) : (
-            /* --- PRIVACY SETTINGS SUB-MENU --- */
-            <div className="flex-1 overflow-y-auto p-4 space-y-5 text-left animate-fade-in">
-              
-              {/* Sub-Menu Header with Back Button */}
-              <button 
-                type="button"
-                onClick={() => setSettingsView("main")}
-                className="flex items-center gap-2 text-xs font-bold text-teal-400 hover:text-white transition-colors cursor-pointer mb-2"
-              >
-                <span>← Back to Settings</span>
-              </button>
-
-              {/* 1. LAST SEEN CONTROL */}
-              <div className="space-y-2">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <span>🕒</span> Who can see my Last Seen
-                </h3>
-                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
-                  {[
-                    { label: "Everyone", value: "everyone" },
-                    { label: "Contacts Only", value: "contacts" },
-                    { label: "Nobody", value: "nobody" },
-                    { label: "Specific Person...", value: "specific" },
-                  ].map((opt) => (
-                    <label 
-                      key={opt.value} 
-                      onClick={() => handlePrivacyChange("lastSeen", opt.value)}
-                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
-                    >
-                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
-                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.lastSeen === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
-                        {privacySettings.lastSeen === opt.value && <span className="text-[10px] font-bold">✓</span>}
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* 2. PROFILE PHOTO CONTROL */}
-              <div className="space-y-2">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <span>🖼️</span> Who can see my Profile Photo
-                </h3>
-                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
-                  {[
-                    { label: "Everyone", value: "everyone" },
-                    { label: "Contacts Only", value: "contacts" },
-                    { label: "Nobody", value: "nobody" },
-                    { label: "Specific Person...", value: "specific" },
-                  ].map((opt) => (
-                    <label 
-                      key={opt.value} 
-                      onClick={() => handlePrivacyChange("profilePhoto", opt.value)}
-                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
-                    >
-                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
-                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.profilePhoto === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
-                        {privacySettings.profilePhoto === opt.value && <span className="text-[10px] font-bold">✓</span>}
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* 3. READ RECEIPTS CONTROL */}
-              <div className="space-y-2">
-                <h3 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <span>✓✓</span> Read Receipts (Blue Ticks)
-                </h3>
-                <div className="space-y-1.5 bg-slate-900/40 p-2 rounded-xl border border-slate-800/60">
-                  {[
-                    { label: "Everyone", value: "everyone" },
-                    { label: "Contacts Only", value: "contacts" },
-                    { label: "Nobody", value: "nobody" },
-                    { label: "Specific Person...", value: "specific" },
-                  ].map((opt) => (
-                    <label 
-                      key={opt.value} 
-                      onClick={() => handlePrivacyChange("readReceipts", opt.value)}
-                      className="flex items-center justify-between p-2.5 rounded-lg hover:bg-slate-800/50 cursor-pointer transition-colors select-none"
-                    >
-                      <span className="text-xs text-slate-300 font-medium">{opt.label}</span>
-                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-all ${privacySettings.readReceipts === opt.value ? "border-teal-400 bg-teal-500/20 text-teal-400" : "border-slate-600"}`}>
-                        {privacySettings.readReceipts === opt.value && <span className="text-[10px] font-bold">✓</span>}
-                      </div>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-            </div>
-          )}
-
-        </div>
-      )}
 
       {/* DYNAMIC COMING SOON TOAST */}
       {comingSoonFeature && (
@@ -1441,7 +1236,8 @@ export default function ChatSidebar() {
               >
                 Done ({specificContacts[activeSpecificModal]?.length || 0} Selected)
               </button>
-            </div>          </div>
+            </div>
+          </div>
         </div>
       )}
 

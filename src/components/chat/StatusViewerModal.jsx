@@ -150,9 +150,17 @@ export default function StatusViewerModal({ isOpen, onClose, currentUser, status
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
+      const tag = e.target.tagName?.toUpperCase();
+      const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable;
+      if (isInput) return;
+
       if (e.key === 'Escape') handleClose();
       if (e.key === 'ArrowRight') handleNext();
       if (e.key === 'ArrowLeft') handlePrev();
+      if (e.code === 'Space' || e.key === ' ') {
+        e.preventDefault();
+        setIsPaused((p) => !p);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
