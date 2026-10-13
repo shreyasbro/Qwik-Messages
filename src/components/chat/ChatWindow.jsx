@@ -24,6 +24,7 @@ import VoiceRecorderBar from './VoiceRecorderBar';
 import DevelopmentModal from './DevelopmentModal';
 import FeatureNoticeModal from '../FeatureNoticeModal';
 import ChatToast from '../ChatToast';
+import { computeBlobHash, saveLocalMedia } from '../../services/localMediaService';
 
 export default function ChatWindow() {
   const { activeChat, setActiveChat, setPreviewImage, chats } = useChat();
@@ -108,6 +109,22 @@ export default function ChatWindow() {
         audioUrl = await blobToBase64(audioBlob);
       }
 
+      let contentHash = null;
+      try {
+        contentHash = await computeBlobHash(audioBlob);
+        if (audioUrl) {
+          await saveLocalMedia(audioUrl, audioBlob, {
+            contentHash,
+            fileName: `Voice Note (${durationSec ? Math.floor(durationSec / 60) + ':' + (durationSec % 60 < 10 ? '0' : '') + (durationSec % 60) : '0:00'})`,
+            fileSize: audioBlob.size,
+            mimeType: audioBlob.type || 'audio/webm',
+            origin: 'uploaded',
+          });
+        }
+      } catch (cacheErr) {
+        console.warn('Audio local cache registration notice:', cacheErr);
+      }
+
       const messagesRef = collection(db, 'chats', targetRoomId, 'messages');
       const senderId = currentUser.uid;
       const senderName = currentUserProfile?.displayName || currentUser.displayName || 'User';
@@ -119,6 +136,8 @@ export default function ChatWindow() {
         mediaType: 'audio',
         messageType: 'media',
         mediaUrl: audioUrl,
+        contentHash: contentHash,
+        fileSizeBytes: audioBlob.size,
         fileName: `Voice Note (${durationSec ? Math.floor(durationSec / 60) + ':' + (durationSec % 60 < 10 ? '0' : '') + (durationSec % 60) : '0:00'})`,
         fileSize: audioBlob.size ? formatFileSize(audioBlob.size) : null,
         duration: durationSec || 0,
@@ -410,6 +429,20 @@ export default function ChatWindow() {
         const isDocument = !isVideo && !isAudio && !isImage;
         const determinedType = isVideo ? "video" : isAudio ? "audio" : isImage ? "image" : "document";
 
+        let contentHash = null;
+        try {
+          contentHash = await computeBlobHash(file);
+          await saveLocalMedia(cloudData.secure_url, file, {
+            contentHash,
+            fileName: file.name,
+            fileSize: file.size,
+            mimeType: file.type,
+            origin: 'uploaded',
+          });
+        } catch (cacheErr) {
+          console.warn('File local cache registration notice:', cacheErr);
+        }
+
         const messagesRef = collection(db, 'chats', roomId, 'messages');
         await addDoc(messagesRef, {
           senderId: senderId,
@@ -419,6 +452,8 @@ export default function ChatWindow() {
           mediaType: determinedType,
           fileName: file.name,
           fileSize: formatFileSize(file.size),
+          fileSizeBytes: file.size,
+          contentHash: contentHash,
           fileExt: fileExt,
           mediaUrl: cloudData.secure_url,
           storageProvider: "cloudinary",

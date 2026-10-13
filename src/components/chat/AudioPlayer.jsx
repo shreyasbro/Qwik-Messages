@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { getLocalMedia } from '../../services/localMediaService';
 
 export default function AudioPlayer({
   src,
@@ -13,6 +14,24 @@ export default function AudioPlayer({
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [effectiveSrc, setEffectiveSrc] = useState(src);
+  const [isLocal, setIsLocal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!src) return;
+
+    getLocalMedia({ mediaUrl: src }).then((res) => {
+      if (!cancelled && res?.isAvailable && res?.localUrl) {
+        setEffectiveSrc(res.localUrl);
+        setIsLocal(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
 
   // Time formatter (MM:SS)
   const formatTime = (timeInSec) => {
@@ -88,7 +107,7 @@ export default function AudioPlayer({
           : 'bg-gray-900 text-white rounded-bl-sm border border-gray-700/80 shadow-black/50'
       }`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={effectiveSrc} preload="metadata" />
 
       {/* TOP HEADER: ICON + FILE INFO + SPEED TOGGLE */}
       <div className="flex items-center justify-between gap-3 pb-3 mb-3 border-b border-white/20">
@@ -117,9 +136,16 @@ export default function AudioPlayer({
             <h5 className="text-sm font-extrabold text-white truncate drop-shadow-sm" title={fileName}>
               {fileName}
             </h5>
-            <span className="text-[11px] font-semibold text-teal-100/90 block mt-0.5">
-              {formatSize(fileSize)}
-            </span>
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-[11px] font-semibold text-teal-100/90 block">
+                {formatSize(fileSize)}
+              </span>
+              {isLocal && (
+                <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/30 text-teal-200 border border-white/10">
+                  ⚡ On device
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

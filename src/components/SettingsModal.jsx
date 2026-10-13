@@ -4,6 +4,14 @@ import { db } from '../firebaseConfig';
 import SetLockModal from './SetLockModal';
 import VerifyLockModal from './VerifyLockModal';
 import SpecificContactsModal from './SpecificContactsModal';
+import {
+  getLocalCacheStats,
+  clearLocalMediaCache,
+  isFileSystemAccessSupported,
+  requestLinkMediaFolder,
+  getLinkedFolderStatus,
+  unlinkMediaFolder,
+} from '../services/localMediaService';
 
 export default function SettingsModal({ isOpen, onClose, currentUser }) {
   // Persist currentView in sessionStorage so parent re-renders never bounce the user to 'main'
@@ -22,6 +30,60 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
   const [activeSpecificModal, setActiveSpecificModal] = useState(null); // 'lastSeen' | 'profilePhoto' | 'about' | null
   const [showSetLockModal, setShowSetLockModal] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
+
+  // Storage & Local Media State
+  const [storageStats, setStorageStats] = useState(null);
+  const [folderStatus, setFolderStatus] = useState(null);
+  const [isLinkingFolder, setIsLinkingFolder] = useState(false);
+  const [storageFeedback, setStorageFeedback] = useState('');
+
+  const refreshStorageData = async () => {
+    try {
+      const stats = await getLocalCacheStats();
+      setStorageStats(stats);
+      const fStatus = await getLinkedFolderStatus();
+      setFolderStatus(fStatus);
+    } catch (e) {
+      console.warn('Storage data refresh notice:', e);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && currentView === 'storage') {
+      refreshStorageData();
+    }
+  }, [isOpen, currentView]);
+
+  const handleLinkFolder = async () => {
+    setIsLinkingFolder(true);
+    setStorageFeedback('');
+    try {
+      const res = await requestLinkMediaFolder();
+      if (res.success) {
+        setStorageFeedback(`Linked folder: ${res.folderName}`);
+        refreshStorageData();
+      }
+    } catch (err) {
+      setStorageFeedback(err.message || 'Folder selection aborted');
+    } finally {
+      setIsLinkingFolder(false);
+    }
+  };
+
+  const handleUnlinkFolder = async () => {
+    await unlinkMediaFolder();
+    setStorageFeedback('Local folder unlinked');
+    refreshStorageData();
+  };
+
+  const handleClearCache = async () => {
+    const ok = window.confirm('Clear all locally cached photos, videos, and audio notes? Files will re-download when viewed again.');
+    if (!ok) return;
+
+    await clearLocalMediaCache();
+    setStorageFeedback('Local media cache cleared!');
+    refreshStorageData();
+  };
 
   const myUid = currentUser?.uid;
 
@@ -360,6 +422,37 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
                 </div>
               </div>
 
+              {/* 2. STORAGE & LOCAL MEDIA TILE */}
+              <div
+                onClick={() => setCurrentView('storage')}
+                className="p-4 rounded-2xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-teal-500/40 flex items-center justify-between cursor-pointer transition-all group shadow-sm"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-11 h-11 rounded-2xl bg-teal-500/10 text-teal-400 flex items-center justify-center border border-teal-500/30 group-hover:scale-105 transition-transform">
+                    <svg className="w-5 h-5 stroke-[2.2]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7M4 7c0-2 1-3 3-3h10c2 0 3 1 3 3M4 7h16m-7 4h2" />
+                    </svg>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-white group-hover:text-teal-400 transition-colors">
+                      Storage & Local Media
+                    </h4>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Smart local media detection, folder access, offline cache
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 text-gray-500 group-hover:text-teal-400">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-teal-400/80 bg-teal-950/60 px-2 py-0.5 rounded-md border border-teal-500/20">
+                    Offline
+                  </span>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </div>
+
               {/* Profile Card Summary */}
               <div className="p-4 rounded-2xl bg-gray-900/40 border border-gray-800/80 flex items-center gap-3.5">
                 <img
@@ -391,8 +484,157 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
         )}
 
         {/* ========================================================= */}
-        {/* VIEW 2: PRIVACY & SECURITY SUB-PAGE (NO MODAL-IN-MODAL)   */}
+        {/* VIEW 3: STORAGE & LOCAL MEDIA MANAGEMENT                  */}
         {/* ========================================================= */}
+        {currentView === 'storage' && (
+          <>
+            {/* Header */}
+            <div className="p-5 border-b border-gray-800 flex items-center justify-between bg-gradient-to-r from-gray-950 via-teal-950/20 to-gray-950">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setCurrentView('main')}
+                  className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-900 transition-colors cursor-pointer"
+                >
+                  <svg className="w-5 h-5 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <div>
+                  <h3 className="text-base font-black text-white">Storage & Local Media</h3>
+                  <p className="text-[11px] text-gray-400 font-medium">Smart detection, folder access, offline reuse</p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleClose}
+                className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-900 transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Storage Body */}
+            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
+              {/* Feedback Alert */}
+              {storageFeedback && (
+                <div className="p-3 rounded-xl bg-teal-950/60 border border-teal-500/40 text-teal-300 text-xs font-semibold flex items-center justify-between">
+                  <span>{storageFeedback}</span>
+                  <button onClick={() => setStorageFeedback('')} className="text-teal-400 hover:text-white">✕</button>
+                </div>
+              )}
+
+              {/* 1. Storage Usage Overview */}
+              <div className="p-4 rounded-2xl bg-gray-900/60 border border-gray-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase tracking-wider text-teal-400">Local Media Cache</h4>
+                  <span className="text-[11px] font-mono font-bold text-gray-300">
+                    {storageStats ? `${(storageStats.totalBytes / (1024 * 1024)).toFixed(2)} MB` : 'Calculating...'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 pt-1 text-center font-mono">
+                  <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                    <div className="text-xs font-bold text-white">{storageStats?.photoCount ?? 0}</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">📷 Photos</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                    <div className="text-xs font-bold text-white">{storageStats?.videoCount ?? 0}</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">🎥 Videos</div>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-black/40 border border-white/5">
+                    <div className="text-xs font-bold text-white">{storageStats?.audioCount ?? 0}</div>
+                    <div className="text-[10px] text-gray-400 mt-0.5">🎵 Audio</div>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-gray-400 leading-relaxed pt-1">
+                  Media you send or download is indexed in high-performance browser storage so it opens instantly without downloading again.
+                </p>
+              </div>
+
+              {/* 2. Device Storage & Folder Linking */}
+              <div className="p-4 rounded-2xl bg-gray-900/60 border border-gray-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black text-white">Device Folder Access</h4>
+                  <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                    folderStatus?.isLinked ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-gray-800 text-gray-400'
+                  }`}>
+                    {folderStatus?.isLinked ? 'Linked' : 'Not Linked'}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-gray-400 leading-relaxed">
+                  Allow Qwik-Messages to check an authorized device folder (such as Downloads or Pictures) for photos, videos, and voice notes. If an exact matching file is found, it plays immediately without re-downloading.
+                </p>
+
+                {isFileSystemAccessSupported() ? (
+                  <div className="pt-1 flex flex-col sm:flex-row gap-2">
+                    <button
+                      type="button"
+                      disabled={isLinkingFolder}
+                      onClick={handleLinkFolder}
+                      className="flex-1 py-2.5 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-gray-950 text-xs font-black transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                      <span>{folderStatus?.isLinked ? 'Change Authorized Folder' : 'Link Device Media Folder'}</span>
+                    </button>
+
+                    {folderStatus?.isLinked && (
+                      <button
+                        type="button"
+                        onClick={handleUnlinkFolder}
+                        className="py-2.5 px-4 rounded-xl bg-rose-950/40 hover:bg-rose-950/70 border border-rose-800/60 text-rose-300 text-xs font-bold transition-all cursor-pointer"
+                      >
+                        Unlink Folder
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl bg-gray-950/80 border border-gray-800 text-[11px] text-gray-400">
+                    ℹ️ Device folder linking requires the File System Access API (supported on desktop Chrome, Edge, and Opera). On mobile or standard browsers, Qwik-Messages automatically uses persistent IndexedDB caching for all downloaded media.
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Cache Management Actions */}
+              <div className="p-4 rounded-2xl bg-gray-900/60 border border-gray-800 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-black text-white">Clear Local Media Cache</h4>
+                  <p className="text-[11px] text-gray-400 mt-0.5">Free up browser storage by clearing locally cached media.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleClearCache}
+                  className="px-4 py-2 rounded-xl bg-rose-950/40 hover:bg-rose-950/70 border border-rose-900/50 text-rose-300 hover:text-rose-200 text-xs font-black transition-all cursor-pointer shrink-0"
+                >
+                  Clear Cache
+                </button>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-gray-800 bg-gray-950 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setCurrentView('main')}
+                className="px-4 py-2 rounded-xl bg-gray-900 hover:bg-gray-800 text-gray-300 text-xs font-bold transition-colors cursor-pointer border border-gray-800 flex items-center gap-1.5"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M15 19l-7-7 7-7" /></svg>
+                <span>Back</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="px-6 py-2 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-600 text-gray-950 text-xs font-black hover:scale-[1.02] active:scale-95 transition-transform cursor-pointer shadow-lg shadow-teal-500/20"
+              >
+                Done
+              </button>
+            </div>
+          </>
+        )}
+        
         {currentView === 'privacy' && (
           <>
             {/* Header with Back Button */}

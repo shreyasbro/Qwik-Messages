@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { getLocalMedia, saveLocalMedia } from '../../services/localMediaService';
 
 export default function VoiceMessagePlayer({
   src,
@@ -12,6 +13,24 @@ export default function VoiceMessagePlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [speed, setSpeed] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [effectiveSrc, setEffectiveSrc] = useState(src);
+  const [isLocal, setIsLocal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!src) return;
+
+    getLocalMedia({ mediaUrl: src }).then((res) => {
+      if (!cancelled && res?.isAvailable && res?.localUrl) {
+        setEffectiveSrc(res.localUrl);
+        setIsLocal(true);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
 
   // 28 Dynamic Waveform Amplitude Heights (WhatsApp Visual Match)
   const waveformPattern = useMemo(() => [
@@ -99,7 +118,7 @@ export default function VoiceMessagePlayer({
           : 'bg-[#1f2c34] text-gray-100 rounded-bl-sm border border-gray-800 shadow-black/50'
       }`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={effectiveSrc} preload="metadata" />
 
       {/* TOP CONTROLS ROW */}
       <div className="flex items-center gap-3">
@@ -193,15 +212,24 @@ export default function VoiceMessagePlayer({
       </div>
 
       {/* BOTTOM METADATA: TIMESTAMP & STATUS BLUE TICKS */}
-      <div className="flex items-center justify-end gap-1 mt-1 text-[10px] font-semibold opacity-90">
-        <span className={isOwn ? 'text-teal-100' : 'text-gray-400'}>{timestamp}</span>
-        {isOwn && (
-          <span className="text-white">
-            <svg className="w-3.5 h-3.5 stroke-[2.8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-          </span>
-        )}
+      <div className="flex items-center justify-between gap-1 mt-1 text-[10px] font-semibold opacity-90">
+        <div>
+          {isLocal && (
+            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/30 text-teal-200 border border-white/10">
+              ⚡ On device
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <span className={isOwn ? 'text-teal-100' : 'text-gray-400'}>{timestamp}</span>
+          {isOwn && (
+            <span className="text-white">
+              <svg className="w-3.5 h-3.5 stroke-[2.8]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
