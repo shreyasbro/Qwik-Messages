@@ -7,6 +7,7 @@ import { useRecipient } from '../../hooks/useRecipient';
 import { safeString, getVisibleAvatar, shouldShowLastSeen } from '../../utils/safeRender';
 import UserSearchModal from './UserSearchModal';
 import ProfileEditorModal from '../profile/ProfileEditorModal';
+import ShowQRCodeModal from '../profile/ShowQRCodeModal';
 import PresenceBadge from '../profile/PresenceBadge';
 import SupportFAQ from './SupportFAQ';
 import CreateGroupModal from './CreateGroupModal';
@@ -404,6 +405,7 @@ export default function ChatSidebar({ onOpenSettings, onOpenUpdates }) {
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isGroupCreateOpen, setIsGroupCreateOpen] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
+  const [showQRModal, setShowQRModal] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [isStatusViewerOpen, setIsStatusViewerOpen] = useState(false);
@@ -808,6 +810,18 @@ export default function ChatSidebar({ onOpenSettings, onOpenUpdates }) {
                     New Direct Message
                   </button>
 
+                  {/* Show / Scan QR Code */}
+                  <button
+                    onClick={() => {
+                      setShowAddMenu(false);
+                      setShowQRModal(true);
+                    }}
+                    className="flex items-center w-full px-4 py-3 text-xs font-bold text-slate-200 hover:bg-slate-800 hover:text-teal-400 transition-colors text-left border-t border-slate-800/80 gap-3 cursor-pointer"
+                  >
+                    <span className="text-teal-400 text-sm">📱</span>
+                    Show &amp; Scan QR Code
+                  </button>
+
                   {/* Create Group */}
                   <button
                     onClick={() => {
@@ -1154,6 +1168,14 @@ export default function ChatSidebar({ onOpenSettings, onOpenUpdates }) {
       <ProfileEditorModal 
         isOpen={showProfileModal} 
         onClose={() => setShowProfileModal(false)} 
+        currentUser={currentUser}
+        userProfile={userProfile}
+      />
+
+      {/* Show & Scan QR Modal */}
+      <ShowQRCodeModal
+        isOpen={showQRModal}
+        onClose={() => setShowQRModal(false)}
         currentUser={currentUser}
         userProfile={userProfile}
       />

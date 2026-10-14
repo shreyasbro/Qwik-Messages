@@ -6,6 +6,7 @@ import { isUsernameAvailable } from '../../utils/usernameUtils';
 import { userService } from '../../services/userService';
 import PhotoEditorModal from './PhotoEditorModal';
 import PresenceBadge, { PRESENCE_OPTIONS } from './PresenceBadge';
+import ShowQRCodeModal from './ShowQRCodeModal';
 
 export default function ProfileEditorModal({ isOpen, onClose, currentUser, userProfile }) {
   const [displayName, setDisplayName] = useState(userProfile?.displayName || currentUser?.displayName || '');
@@ -16,6 +17,7 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingImageSrc, setEditingImageSrc] = useState(null);
+  const [showQRModal, setShowQRModal] = useState(false);
   
   // Uniqueness check state
   const [checkingUsername, setCheckingUsername] = useState(false);
@@ -251,6 +253,26 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
 
           </div>
 
+          {/* SHOW QR TO FRIENDS ACTION BANNER */}
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-gradient-to-r from-teal-950/40 via-slate-900/60 to-emerald-950/40 border border-teal-500/30 mb-6 shadow-md">
+            <div className="flex items-center gap-3 text-left">
+              <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/40 flex items-center justify-center text-teal-300 text-lg">
+                📱
+              </div>
+              <div>
+                <h4 className="text-sm font-black text-white">Show QR to Friends</h4>
+                <p className="text-[11px] text-slate-400">Share your permanent profile QR or scan a friend</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowQRModal(true)}
+              className="py-2 px-3.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
+            >
+              Open QR
+            </button>
+          </div>
+
           {/* Form Fields */}
           <div className="space-y-4">
             <div>
@@ -348,6 +370,12 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
           }} 
         />
       )}
+      <ShowQRCodeModal
+        isOpen={showQRModal}
+        onClose={() => setShowQRModal(false)}
+        currentUser={currentUser}
+        userProfile={userProfile}
+      />
     </div>
   );
 }

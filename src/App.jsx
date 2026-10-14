@@ -11,14 +11,54 @@ import AccountMergeModal from './components/auth/AccountMergeModal';
 import AppLockScreen from './components/AppLockScreen';
 import UnderConstructionModal from './components/UnderConstructionModal';
 import { useSessionTimeout } from './hooks/useSessionTimeout';
+import { qrProfileService } from './services/qrProfileService';
+import ShowQRCodeModal from './components/profile/ShowQRCodeModal';
 
 // ✅ REFACTOR: MainLayoutWrapper declared OUTSIDE AppContent to prevent remounts
 function MainLayoutWrapper() {
-  const { previewImage, setPreviewImage } = useChat();
+  const { previewImage, setPreviewImage, setActiveChat } = useChat();
+  const { currentUser, userProfile } = useAuth();
+  const [showQRDirectModal, setShowQRDirectModal] = React.useState(false);
+
+  // Deep-link detection for ?friend_uid= or ?add_friend=
+  React.useEffect(() => {
+    if (!currentUser?.uid) return;
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const friendUid = urlParams.get('friend_uid') || urlParams.get('add_friend');
+      if (friendUid && friendUid !== currentUser.uid) {
+        qrProfileService.resolveProfileByUid(friendUid, currentUser.uid).then((res) => {
+          if (res.success && res.user) {
+            const shouldAdd = window.confirm(
+              `Add ${res.user.displayName || 'this user'} (@${(res.user.username || '').replace(/^@/, '')}) as a friend on Qwik Messages?`
+            );
+            if (shouldAdd) {
+              qrProfileService.confirmAndAddFriend(currentUser, res.user).then((activeRoom) => {
+                setActiveChat(activeRoom);
+              }).catch((e) => console.error("Confirm friend failed:", e));
+            }
+          } else if (res.error) {
+            alert(res.error);
+          }
+          // Clean URL params without reloading
+          window.history.replaceState({}, document.title, window.location.pathname);
+        });
+      }
+    } catch (e) {
+      console.warn("Friend deep-link resolution notice:", e);
+    }
+  }, [currentUser?.uid, setActiveChat]);
+
   return (
     <>
       <MainLayout />
       <AccountMergeModal />
+      <ShowQRCodeModal
+        isOpen={showQRDirectModal}
+        onClose={() => setShowQRDirectModal(false)}
+        currentUser={currentUser}
+        userProfile={userProfile}
+      />
       
       {/* Qwik Immersive Media Viewer */}
       {previewImage && (
