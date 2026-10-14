@@ -199,10 +199,13 @@ export default function QwikStatusModal({
       }
       map[uid].stories.push({
         id: st.id,
-        type: st.type || (st.mediaUrl || st.imageUrl || st.content?.startsWith('http') ? 'image' : 'text'),
+        type: st.type || (st.videoUrl || (st.mediaUrl && (st.mediaUrl.endsWith('.mp4') || st.mediaUrl.endsWith('.webm'))) ? 'video' : (st.mediaUrl || st.imageUrl || st.content?.startsWith('http') ? 'image' : 'text')),
         text: st.text || st.caption || (st.type === 'text' ? st.content : '') || '',
         mediaUrl: st.mediaUrl || st.imageUrl || (st.type === 'image' ? st.content : '') || '',
+        videoUrl: st.videoUrl || (st.type === 'video' ? (st.mediaUrl || st.content) : '') || '',
         bgColor: st.bgColor || '#0f766e',
+        textColor: st.textColor || '#ffffff',
+        reactions: st.reactions || {},
         createdAt: st.createdAt,
         viewers: st.viewers || [],
         viewerUids: st.viewerUids || [],
@@ -248,10 +251,13 @@ export default function QwikStatusModal({
         setActiveStoryLive({
           id: docSnap.id,
           ...dData,
-          type: dData.type || (dData.mediaUrl || dData.imageUrl || dData.content?.startsWith('http') ? 'image' : 'text'),
+          type: dData.type || (dData.videoUrl || (dData.mediaUrl && (dData.mediaUrl.endsWith('.mp4') || dData.mediaUrl.endsWith('.webm'))) ? 'video' : (dData.mediaUrl || dData.imageUrl || dData.content?.startsWith('http') ? 'image' : 'text')),
           text: dData.text || dData.caption || (dData.type === 'text' ? dData.content : '') || '',
           mediaUrl: dData.mediaUrl || dData.imageUrl || (dData.type === 'image' ? dData.content : '') || '',
+          videoUrl: dData.videoUrl || (dData.type === 'video' ? (dData.mediaUrl || dData.content) : '') || '',
           bgColor: dData.bgColor || '#0f766e',
+          textColor: dData.textColor || '#ffffff',
+          reactions: dData.reactions || {},
           viewers: dData.viewers || [],
           viewerUids: dData.viewerUids || [],
           viewCount: dData.viewCount || (dData.viewers?.length || 0),
@@ -565,6 +571,98 @@ export default function QwikStatusModal({
     }
   };
 
+  // Touch swipe handling for mobile
+  const touchStartXRef = useRef(null);
+  const touchStartYRef = useRef(null);
+
+  const handleTouchStart = (e) => {
+    setIsHoldPaused(true);
+    if (e.touches && e.touches[0]) {
+      touchStartXRef.current = e.touches[0].clientX;
+      touchStartYRef.current = e.touches[0].clientY;
+    }
+  };
+
+  const handleTouchEnd = (e) => {
+    setIsHoldPaused(false);
+    if (touchStartXRef.current !== null && e.changedTouches && e.changedTouches[0]) {
+      const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
+      const deltaY = e.changedTouches[0].clientY - touchStartYRef.current;
+      // If horizontal swipe is prominent (> 45px) and greater than vertical drift
+      if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY)) {
+        if (deltaX < 0) {
+          handleNextStory();
+        } else {
+          handlePrevStory();
+        }
+      }
+    }
+    touchStartXRef.current = null;
+    touchStartYRef.current = null;
+  };
+
+  // Quick Emoji Reaction handler
+  const handleEmojiReaction = async (emoji) => {
+    if (!currentStory?.id || !myUid || selectedUserUid === myUid) return;
+    try {
+      const storyRef = doc(db, 'statuses', currentStory.id);
+      await setDoc(
+        storyRef,
+        {
+          reactions: {
+            [myUid]: {
+              emoji,
+              senderId: myUid,
+              senderName: currentUser?.displayName || currentUser?.name || 'Friend',
+              timestamp: new Date().toISOString(),
+            },
+          },
+        },
+        { merge: true }
+      );
+
+      // Also send a friendly direct chat notification so contact sees the reaction
+      if (activeGroup?.userId) {
+        const chatsRef = collection(db, 'chats');
+        const q1 = query(chatsRef, where('participants', 'array-contains', myUid));
+        const snap1 = await getDocs(q1);
+        let targetChatId = null;
+        snap1.forEach((d) => {
+          const data = d.data();
+          if (!data.isGroup && data.participants?.includes(activeGroup.userId)) {
+            targetChatId = d.id;
+          }
+        });
+        if (targetChatId) {
+          await addDoc(collection(db, 'chats', targetChatId, 'messages'), {
+            text: `Reacted ${emoji} to your status`,
+            isStoryReply: true,
+            storyReplyData: {
+              storyId: currentStory.id || '',
+              mediaUrl: currentStory.mediaUrl || currentStory.videoUrl || '',
+              text: currentStory.text || '',
+              bgColor: currentStory.bgColor || '#0f766e',
+              type: currentStory.type || 'text',
+              ownerName: activeGroup?.userName || 'Contact',
+              ownerAvatar: activeGroup?.userAvatar || '',
+            },
+            senderId: myUid,
+            senderName: currentUser?.displayName || currentUser?.name || 'User',
+            senderAvatar: currentUser?.photoURL || '',
+            createdAt: serverTimestamp(),
+            timestamp: serverTimestamp(),
+            timestampMillis: Date.now(),
+          });
+        }
+      }
+
+      setReplySentSuccess(true);
+      setTimeout(() => setReplySentSuccess(false), 2000);
+    } catch (err) {
+      console.error('Error adding reaction:', err);
+    }
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e) => {
@@ -853,17 +951,36 @@ export default function QwikStatusModal({
               className="flex-1 relative flex items-center justify-center bg-gray-950 overflow-hidden"
               onMouseDown={() => setIsHoldPaused(true)}
               onMouseUp={() => setIsHoldPaused(false)}
-              onTouchStart={() => setIsHoldPaused(true)}
-              onTouchEnd={() => setIsHoldPaused(false)}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
             >
-              {currentStory.type === 'text' || !currentStory.mediaUrl ? (
+              {currentStory.type === 'text' || (!currentStory.mediaUrl && !currentStory.videoUrl) ? (
                 <div
                   className="w-full h-full flex items-center justify-center p-8 text-center"
-                  style={{ background: currentStory.bgColor }}
+                  style={{ background: currentStory.bgColor || '#0f766e' }}
                 >
-                  <p className="text-2xl font-black text-white leading-relaxed break-words max-w-sm drop-shadow-md">
+                  <p 
+                    className="text-2xl font-black leading-relaxed break-words max-w-sm drop-shadow-md"
+                    style={{ color: currentStory.textColor || '#ffffff' }}
+                  >
                     {currentStory.text}
                   </p>
+                </div>
+              ) : currentStory.type === 'video' || currentStory.videoUrl ? (
+                <div className="w-full h-full flex flex-col justify-center items-center bg-black relative">
+                  <video
+                    src={currentStory.videoUrl || currentStory.mediaUrl}
+                    autoPlay
+                    playsInline
+                    loop
+                    muted={false}
+                    className="w-full h-full object-contain bg-black"
+                  />
+                  {currentStory.text && (
+                    <div className="absolute bottom-3 inset-x-3 p-3 bg-gray-950/80 backdrop-blur-md rounded-2xl text-white text-center text-xs font-semibold z-20 border border-gray-800/80">
+                      {currentStory.text}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="w-full h-full flex flex-col justify-center items-center bg-black relative pointer-events-none">
@@ -879,6 +996,13 @@ export default function QwikStatusModal({
                       {currentStory.text}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* FLOATING QUICK EMOJI REACTION BADGE (IF VIEWER REACTED) */}
+              {currentStory.reactions && myUid && currentStory.reactions[myUid] && (
+                <div className="absolute top-20 right-4 z-40 bg-gray-950/80 border border-teal-500/40 rounded-full px-2.5 py-1 text-sm shadow-xl animate-in zoom-in-75 duration-150">
+                  {currentStory.reactions[myUid]?.emoji || currentStory.reactions[myUid]}
                 </div>
               )}
 
@@ -899,7 +1023,7 @@ export default function QwikStatusModal({
               />
             </div>
 
-            {/* Bottom Actions: Owner Views Bar OR Contact Reply Bar */}
+            {/* Bottom Actions: Owner Views Bar OR Contact Reply & Reaction Bar */}
             {selectedUserUid === myUid ? (
               <div 
                 className="p-3.5 bg-gray-950/90 border-t border-gray-800 z-50 flex items-center justify-center cursor-pointer hover:bg-gray-900 transition-colors"
@@ -913,50 +1037,79 @@ export default function QwikStatusModal({
                     <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                   </svg>
                   <span>{totalViewCount} {totalViewCount === 1 ? 'view' : 'views'}</span>
+                  {currentStory.reactions && Object.keys(currentStory.reactions).length > 0 && (
+                    <span className="ml-1 px-2 py-0.5 rounded-full bg-teal-500/20 text-teal-300 text-[10px]">
+                      {Object.keys(currentStory.reactions).length} reaction{Object.keys(currentStory.reactions).length > 1 ? 's' : ''}
+                    </span>
+                  )}
                   <svg className={`w-3.5 h-3.5 stroke-[2.5] transition-transform ${showViewersList ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
                   </svg>
                 </div>
               </div>
             ) : (
-              <form 
-                onSubmit={handleSendStatusReply}
-                className="p-3 bg-gray-950 border-t border-gray-800 z-50 flex items-center gap-2 relative"
+              <div 
+                className="bg-gray-950 border-t border-gray-800 z-50 flex flex-col relative"
                 onMouseDown={(e) => e.stopPropagation()}
                 onTouchStart={(e) => e.stopPropagation()}
               >
-                {/* Success Toast */}
-                {replySentSuccess && (
-                  <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-teal-500 text-gray-950 text-[11px] font-black px-3 py-1 rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap">
-                    Reply sent to {activeGroup?.userName} ✓
-                  </div>
-                )}
+                {/* QUICK EMOJI REACTIONS ROW */}
+                <div className="flex items-center justify-around px-3 pt-2 pb-1 border-b border-gray-900/60">
+                  {['❤️', '😂', '🔥', '😮', '👏', '😢'].map((emoji) => {
+                    const isMyReaction = currentStory.reactions && currentStory.reactions[myUid]?.emoji === emoji;
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleEmojiReaction(emoji)}
+                        className={`text-lg p-1.5 rounded-xl hover:scale-125 transition-transform cursor-pointer ${
+                          isMyReaction ? 'bg-teal-500/20 border border-teal-500/50 scale-110' : 'hover:bg-gray-800'
+                        }`}
+                        title={`React ${emoji}`}
+                      >
+                        {emoji}
+                      </button>
+                    );
+                  })}
+                </div>
 
-                <input
-                  type="text"
-                  placeholder={`Reply to ${activeGroup?.userName || 'status'}...`}
-                  value={replyText}
-                  onChange={(e) => setReplyText(e.target.value)}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  onKeyUp={(e) => e.stopPropagation()}
-                  className="flex-1 px-4 py-2 bg-gray-900 border border-gray-800 rounded-2xl text-xs text-white placeholder-gray-500 outline-none focus:border-teal-500 transition-colors"
-                />
-
-                <button
-                  type="submit"
-                  disabled={!replyText.trim() || replySending}
-                  className={`p-2 rounded-xl font-bold transition-all shadow-md ${
-                    replyText.trim() && !replySending
-                      ? 'bg-teal-500 hover:bg-teal-400 text-gray-950 shadow-teal-500/20 cursor-pointer active:scale-95'
-                      : 'bg-gray-800 text-gray-600 cursor-not-allowed'
-                  }`}
-                  title="Send Reply"
+                <form 
+                  onSubmit={handleSendStatusReply}
+                  className="p-3 flex items-center gap-2 relative"
                 >
-                  <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
-                  </svg>
-                </button>
-              </form>
+                  {/* Success Toast */}
+                  {replySentSuccess && (
+                    <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-teal-500 text-gray-950 text-[11px] font-black px-3 py-1 rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150 whitespace-nowrap">
+                      Reply sent to {activeGroup?.userName} ✓
+                    </div>
+                  )}
+
+                  <input
+                    type="text"
+                    placeholder={`Reply to ${activeGroup?.userName || 'status'}...`}
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => e.stopPropagation()}
+                    onKeyUp={(e) => e.stopPropagation()}
+                    className="flex-1 px-4 py-2 bg-gray-900 border border-gray-800 rounded-2xl text-xs text-white placeholder-gray-500 outline-none focus:border-teal-500 transition-colors"
+                  />
+
+                  <button
+                    type="submit"
+                    disabled={!replyText.trim() || replySending}
+                    className={`p-2 rounded-xl font-bold transition-all shadow-md ${
+                      replyText.trim() && !replySending
+                        ? 'bg-teal-500 hover:bg-teal-400 text-gray-950 shadow-teal-500/20 cursor-pointer active:scale-95'
+                        : 'bg-gray-800 text-gray-600 cursor-not-allowed'
+                    }`}
+                    title="Send Reply"
+                  >
+                    <svg className="w-4 h-4 stroke-[2.5]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </form>
+              </div>
             )}
 
             {/* OWNER VIEWER DRAWER SHEET */}
@@ -987,6 +1140,9 @@ export default function QwikStatusModal({
                   {mergedViewers.length > 0 ? (
                     mergedViewers.map((viewer, vIdx) => {
                       const { name: resolvedName, avatar: resolvedAvatar } = resolveViewerInfo(viewer);
+                      const viewerUid = typeof viewer === 'string' ? viewer : (viewer.uid || viewer.id);
+                      const reactionObj = currentStory.reactions && viewerUid ? currentStory.reactions[viewerUid] : null;
+                      const reactionEmoji = reactionObj ? (reactionObj.emoji || reactionObj) : null;
                       const viewedAtStr = typeof viewer === 'object' && viewer.viewedAt
                         ? new Date(viewer.viewedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                         : 'Viewed';
@@ -999,7 +1155,14 @@ export default function QwikStatusModal({
                               alt={resolvedName}
                               className="w-8 h-8 rounded-full object-cover border border-gray-800"
                             />
-                            <span className="text-xs font-bold text-white truncate max-w-[170px]">{resolvedName}</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-bold text-white truncate max-w-[150px]">{resolvedName}</span>
+                              {reactionEmoji && (
+                                <span className="text-xs bg-gray-900 px-1.5 py-0.5 rounded-full border border-gray-800">
+                                  {reactionEmoji}
+                                </span>
+                              )}
+                            </div>
                           </div>
                           <span className="text-[10px] text-gray-500 font-medium shrink-0">
                             {viewedAtStr}

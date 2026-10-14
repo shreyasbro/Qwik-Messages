@@ -38,9 +38,11 @@ export default function StatusBar({ currentUser, onOpenViewer, onOpenUpload }) {
   const myStatuses = statusGroups[currentUser?.uid] || [];
 
   const hasUnviewedStories = (storiesList, currentUserId) => {
-    return storiesList.some(
-      (story) => !story.viewers || !story.viewers.includes(currentUserId)
-    );
+    return storiesList.some((story) => {
+      if (story.viewerUids && story.viewerUids.includes(currentUserId)) return false;
+      if (story.viewers && story.viewers.some((v) => (typeof v === 'string' ? v === currentUserId : v.uid === currentUserId))) return false;
+      return true;
+    });
   };
 
   return (
