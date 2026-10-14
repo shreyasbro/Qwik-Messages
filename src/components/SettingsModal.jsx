@@ -11,6 +11,7 @@ import {
   requestLinkMediaFolder,
   getLinkedFolderStatus,
   unlinkMediaFolder,
+  reauthorizeLinkedFolder,
 } from '../services/localMediaService';
 
 export default function SettingsModal({ isOpen, onClose, currentUser }) {
@@ -62,9 +63,36 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
       if (res.success) {
         setStorageFeedback(`Linked folder: ${res.folderName}`);
         refreshStorageData();
+      } else if (res.cancelled) {
+        setStorageFeedback('Folder selection was cancelled.');
       }
     } catch (err) {
-      setStorageFeedback(err.message || 'Folder selection aborted');
+      if (err.name === 'AbortError') {
+        setStorageFeedback('Folder selection was cancelled.');
+      } else if (err.name === 'SecurityError') {
+        setStorageFeedback('Access blocked by browser security. Ensure you click directly on the button.');
+      } else {
+        setStorageFeedback(err.message || 'Folder selection aborted');
+      }
+    } finally {
+      setIsLinkingFolder(false);
+    }
+  };
+
+  const handleReauthorizeFolder = async () => {
+    setIsLinkingFolder(true);
+    setStorageFeedback('');
+    try {
+      const res = await reauthorizeLinkedFolder();
+      if (res.success) {
+        setStorageFeedback(`Permission re-granted for "${res.folderName}"!`);
+        refreshStorageData();
+      } else if (res.denied) {
+        setStorageFeedback('Permission denied. Please click the button and choose "Allow" in the browser prompt.');
+        refreshStorageData();
+      }
+    } catch (err) {
+      setStorageFeedback(err.message || 'Failed to re-authorize folder.');
     } finally {
       setIsLinkingFolder(false);
     }
@@ -216,6 +244,24 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
     }
     if (!myUid) return;
 
+    // Optimistically update local userDocData state
+    setUserDocData((prev) => ({
+      ...prev,
+      privacySettings: {
+        ...(prev?.privacySettings || {}),
+        [key]: value,
+      },
+    }));
+
+    // Optimistically sync to localStorage cache
+    try {
+      const cached = {
+        ...privacySettings,
+        [key]: value,
+      };
+      localStorage.setItem(`privacy_${myUid}`, JSON.stringify(cached));
+    } catch {}
+
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 1500);
 
@@ -304,18 +350,35 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
   const handleSaveCustomLock = async (lockType, secretVal) => {
     if (!myUid) return;
 
-    const updated = {
+    const trimmedSecret = String(secretVal || '').trim();
+    const updatedPrivacy = {
       ...privacySettings,
       appLockEnabled: true,
       appLockType: lockType,
-      appLockSecret: secretVal,
-      appPin: secretVal, // backwards-compatible
+      appLockSecret: trimmedSecret,
+      appPin: trimmedSecret, // backwards-compatible
     };
-    setPrivacySettings(updated);
-    try {
-      localStorage.setItem(`privacy_${myUid}`, JSON.stringify(updated));
-    } catch {}
 
+    // 1. Optimistically update local snapshot document state
+    setUserDocData((prev) => ({
+      ...prev,
+      privacySettings: {
+        ...(prev?.privacySettings || {}),
+        appLockEnabled: true,
+        appLockType: lockType,
+        appLockSecret: trimmedSecret,
+        appPin: trimmedSecret,
+      },
+    }));
+
+    // 2. Persist to localStorage for instant non-flash reads on app startup
+    try {
+      localStorage.setItem(`privacy_${myUid}`, JSON.stringify(updatedPrivacy));
+    } catch (e) {
+      console.warn('[Privacy] Failed to cache lock to localStorage:', e);
+    }
+
+    // 3. Persist to Firestore
     try {
       const userRef = doc(db, 'users', myUid);
       await setDoc(
@@ -324,8 +387,8 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
           privacySettings: {
             appLockEnabled: true,
             appLockType: lockType,
-            appLockSecret: secretVal,
-            appPin: secretVal,
+            appLockSecret: trimmedSecret,
+            appPin: trimmedSecret,
           },
         },
         { merge: true }
@@ -333,7 +396,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2000);
     } catch (err) {
-      console.warn('[Privacy] Local lock updated:', err?.message || err);
+      console.warn('[Privacy] Firestore lock update notice:', err?.message || err);
     }
   };
 
@@ -557,11 +620,22 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
               {/* 2. Device Storage & Folder Linking */}
               <div className="p-4 rounded-2xl bg-gray-900/60 border border-gray-800 space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-black text-white">Device Folder Access</h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-black text-white">Device Folder Access</h4>
+                    {folderStatus?.folderName && (
+                      <span className="text-[10px] text-teal-400 font-mono font-bold bg-teal-950/60 px-2 py-0.5 rounded border border-teal-500/20">
+                        📁 {folderStatus.folderName}
+                      </span>
+                    )}
+                  </div>
                   <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
-                    folderStatus?.isLinked ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-gray-800 text-gray-400'
+                    folderStatus?.isLinked 
+                      ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' 
+                      : folderStatus?.needsPermission
+                        ? 'bg-amber-950 text-amber-300 border border-amber-500/30'
+                        : 'bg-gray-800 text-gray-400'
                   }`}>
-                    {folderStatus?.isLinked ? 'Linked' : 'Not Linked'}
+                    {folderStatus?.isLinked ? 'LINKED' : folderStatus?.needsPermission ? 'PERMISSION NEEDED' : 'NOT LINKED'}
                   </span>
                 </div>
 
@@ -570,26 +644,44 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
                 </p>
 
                 {isFileSystemAccessSupported() ? (
-                  <div className="pt-1 flex flex-col sm:flex-row gap-2">
-                    <button
-                      type="button"
-                      disabled={isLinkingFolder}
-                      onClick={handleLinkFolder}
-                      className="flex-1 py-2.5 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-gray-950 text-xs font-black transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
-                      <span>{folderStatus?.isLinked ? 'Change Authorized Folder' : 'Link Device Media Folder'}</span>
-                    </button>
+                  <div className="pt-1 flex flex-col gap-2">
+                    {folderStatus?.needsPermission && (
+                      <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/30 flex items-center justify-between">
+                        <div className="text-[11px] text-amber-200">
+                          ⚠️ Folder &ldquo;{folderStatus.folderName}&rdquo; was linked previously. Click below to grant access for this session.
+                        </div>
+                        <button
+                          type="button"
+                          disabled={isLinkingFolder}
+                          onClick={handleReauthorizeFolder}
+                          className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 text-[11px] font-black rounded-lg transition-colors cursor-pointer shrink-0 ml-2"
+                        >
+                          Grant Access
+                        </button>
+                      </div>
+                    )}
 
-                    {folderStatus?.isLinked && (
+                    <div className="flex flex-col sm:flex-row gap-2">
                       <button
                         type="button"
-                        onClick={handleUnlinkFolder}
-                        className="py-2.5 px-4 rounded-xl bg-rose-950/40 hover:bg-rose-950/70 border border-rose-800/60 text-rose-300 text-xs font-bold transition-all cursor-pointer"
+                        disabled={isLinkingFolder}
+                        onClick={handleLinkFolder}
+                        className="flex-1 py-2.5 px-4 rounded-xl bg-teal-500 hover:bg-teal-400 text-gray-950 text-xs font-black transition-all cursor-pointer shadow-md flex items-center justify-center gap-2"
                       >
-                        Unlink Folder
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" /></svg>
+                        <span>{folderStatus?.isLinked ? 'Change Authorized Folder' : 'Link Device Media Folder'}</span>
                       </button>
-                    )}
+
+                      {(folderStatus?.isLinked || folderStatus?.folderName) && (
+                        <button
+                          type="button"
+                          onClick={handleUnlinkFolder}
+                          className="py-2.5 px-4 rounded-xl bg-rose-950/40 hover:bg-rose-950/70 border border-rose-800/60 text-rose-300 text-xs font-bold transition-all cursor-pointer"
+                        >
+                          Unlink Folder
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <div className="p-3 rounded-xl bg-gray-950/80 border border-gray-800 text-[11px] text-gray-400">

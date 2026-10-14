@@ -462,6 +462,35 @@ export const getLinkedFolderStatus = async () => {
 };
 
 /**
+ * Re-request permission on an already stored folder handle (after page reload/prompt)
+ */
+export const reauthorizeLinkedFolder = async () => {
+  try {
+    const db = await getDB();
+    const folderRecord = await new Promise((resolve) => {
+      const tx = db.transaction(STORE_FOLDERS, 'readonly');
+      const store = tx.objectStore(STORE_FOLDERS);
+      const req = store.get('linked_media_folder');
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => resolve(null);
+    });
+
+    if (!folderRecord || !folderRecord.handle) {
+      return requestLinkMediaFolder();
+    }
+
+    const newPerm = await folderRecord.handle.requestPermission({ mode: 'read' });
+    if (newPerm === 'granted') {
+      return { success: true, folderName: folderRecord.folderName };
+    }
+    return { success: false, denied: true };
+  } catch (err) {
+    if (err.name === 'AbortError') return { cancelled: true };
+    return requestLinkMediaFolder();
+  }
+};
+
+/**
  * Unlink authorized media folder
  */
 export const unlinkMediaFolder = async () => {

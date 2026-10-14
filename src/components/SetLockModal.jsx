@@ -10,8 +10,9 @@ export default function SetLockModal({ isOpen, onClose, onSave, currentType = 'p
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setError('');
 
     if (lockType === 'pin') {
@@ -35,9 +36,14 @@ export default function SetLockModal({ isOpen, onClose, onSave, currentType = 'p
     }
 
     setIsSubmitting(true);
-    onSave(lockType, secretVal.trim());
-    setIsSubmitting(false);
-    onClose();
+    try {
+      await onSave(lockType, secretVal.trim());
+      onClose();
+    } catch (err) {
+      setError(err?.message || 'Failed to save lock. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (

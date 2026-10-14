@@ -1,18 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { doc, setDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { doc, setDoc } from 'firebase/firestore';
+import { reauthenticateWithPopup, signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { auth, db, googleProvider } from '../firebaseConfig';
 
 export default function AppLockScreen({ currentUser, privacySettings, onUnlock }) {
-  const [currentView, setCurrentView] = useState('enter_lock'); // 'enter_lock' | 'verify_otp' | 'otp_verified_choice' | 'set_new_lock'
+  const [currentView, setCurrentView] = useState('enter_lock'); // 'enter_lock' | 'verify_otp' | 'reauth_options' | 'otp_verified_choice' | 'set_new_lock'
   const [inputVal, setInputVal] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [statusNotice, setStatusNotice] = useState('');
   
-  // OTP States
-  const [generatedOtp, setGeneratedOtp] = useState(null);
+  // OTP & Reset States
+  const [resetToken, setResetToken] = useState(null);
   const [enteredOtp, setEnteredOtp] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [isReauthenticating, setIsReauthenticating] = useState(false);
   const [resendTimer, setResendTimer] = useState(0);
 
   // New Lock States
@@ -47,86 +50,173 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
     }
   };
 
-  // 2. DISPATCH REAL EMAIL VIA RESEND API
+  // Helper to safely parse responses and handle 404/HTML errors gracefully
+  const safeParseResponse = async (response) => {
+    const contentType = response.headers.get('content-type') || '';
+    let parsedData = null;
+    if (contentType.includes('application/json')) {
+      try {
+        parsedData = await response.json();
+      } catch {
+        parsedData = null;
+      }
+    } else {
+      const text = await response.text();
+      if (text) {
+        try {
+          parsedData = JSON.parse(text);
+        } catch {
+          parsedData = { error: text.slice(0, 120) };
+        }
+      }
+    }
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error('Recovery server endpoint unavailable (404). Please ensure the backend server is running.');
+      }
+      throw new Error(parsedData?.error || `Server request failed with status ${response.status}`);
+    }
+
+    return parsedData || {};
+  };
+
+  // 2. DISPATCH RECOVERY OTP VIA SECURE SERVER (Zero client exposure, Resend completely removed)
   const handleSendRecoveryOtp = async () => {
     setError('');
     setIsSending(true);
 
-    const randomOtp = Math.floor(1000 + Math.random() * 9000).toString();
-    setGeneratedOtp(randomOtp);
-
-    // DevTools visibility for testing
-    console.log(
-      `%c[Resend OTP Delivery] ✉️ OTP for ${userEmail}: ${randomOtp}`,
-      'color: #2dd4bf; font-weight: 900; font-size: 14px; background: #042f2e; padding: 4px 8px; border-radius: 6px;'
-    );
-
-    const RESEND_API_KEY = import.meta.env.VITE_RESEND_API_KEY || '';
-
     try {
-      const response = await fetch('https://api.resend.com/emails', {
+      const response = await fetch('/api/app-lock/send-otp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${RESEND_API_KEY}`,
         },
         body: JSON.stringify({
-          from: 'Qwik Messages Security <onboarding@resend.dev>',
-          to: [userEmail],
-          subject: 'Qwik Messages - App Lock PIN Reset OTP',
-          html: `
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #030712; padding: 36px 20px; color: #ffffff; border-radius: 20px; max-width: 480px; margin: 0 auto; border: 1px solid #1f2937;">
-              <div style="text-align: center; margin-bottom: 24px;">
-                <h1 style="color: #14b8a6; font-size: 22px; font-weight: 900; margin: 0; letter-spacing: -0.5px;">Qwik Messages</h1>
-                <p style="color: #9ca3af; font-size: 12px; margin-top: 4px;">Security & Privacy Verification</p>
-              </div>
-
-              <div style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; padding: 24px; text-align: center; margin-bottom: 20px;">
-                <p style="color: #9ca3af; font-size: 13px; margin: 0 0 16px 0;">Use the following 4-digit code to reset your App Lock PIN / Password:</p>
-                <div style="display: inline-block; background-color: #042f2e; border: 1px solid #14b8a6; padding: 12px 28px; border-radius: 12px;">
-                  <span style="font-size: 32px; font-weight: 900; letter-spacing: 10px; color: #2dd4bf; font-family: monospace;">${randomOtp}</span>
-                </div>
-                <p style="color: #6b7280; font-size: 11px; margin-top: 14px; margin-bottom: 0;">This code is valid for 10 minutes. Never share this code with anyone.</p>
-              </div>
-
-              <div style="text-align: center; color: #4b5563; font-size: 11px;">
-                <p style="margin: 0;">If you did not request this OTP, you can safely ignore this email.</p>
-              </div>
-            </div>
-          `,
+          uid: myUid,
+          email: userEmail,
         }),
       });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.warn('[Resend API Warning]:', errorData);
-      }
+      const data = await safeParseResponse(response);
 
-      setStatusNotice(`4-digit verification code sent to ${userEmail}. Check your inbox!`);
+      setStatusNotice(data.message || `Verification code sent to ${userEmail}. Check your inbox!`);
       setResendTimer(30);
       setCurrentView('verify_otp');
     } catch (err) {
-      console.warn('[Resend Network Note]:', err.message);
-      setStatusNotice(`Verification code generated. Check inbox or DevTools console.`);
-      setCurrentView('verify_otp');
+      console.warn('[AppLock Recovery notice]:', err.message);
+      setError(err.message || 'Unable to send recovery code. Please try again.');
     } finally {
       setIsSending(false);
     }
   };
 
-  // 3. VERIFY 4-DIGIT OTP
-  const handleVerifyOtp = (e) => {
+  // 3. VERIFY 4-DIGIT OTP ON SERVER (Cryptographically verified, rate-limited, single-use token)
+  const handleVerifyOtp = async (e) => {
     e.preventDefault();
-    if (enteredOtp === generatedOtp) {
+    setError('');
+    setIsVerifying(true);
+
+    try {
+      const response = await fetch('/api/app-lock/verify-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          uid: myUid,
+          code: enteredOtp,
+        }),
+      });
+
+      const data = await safeParseResponse(response);
+
+      if (!data.resetToken) {
+        throw new Error('Verification did not return an authorization token.');
+      }
+
+      setResetToken(data.resetToken);
       setError('');
       setStatusNotice('');
       setCurrentView('otp_verified_choice');
-    } else {
-      setError('Invalid 4-digit code. Please enter the correct code.');
+    } catch (err) {
+      setError(err.message || 'Verification failed. Please try again.');
+    } finally {
+      setIsVerifying(false);
     }
   };
 
-  // 4. SAVE NEW PIN / PASSWORD
+  // 3B. ALTERNATIVE RECOVERY: FIREBASE REAUTHENTICATION (Google / Supported Provider)
+  const handleFirebaseReauth = async () => {
+    setError('');
+    setIsReauthenticating(true);
+
+    try {
+      const user = auth.currentUser;
+      if (!user) {
+        throw new Error('No active user session found. Please sign in again.');
+      }
+
+      let reauthResult;
+      try {
+        // Try native reauthentication popup first
+        reauthResult = await reauthenticateWithPopup(user, googleProvider);
+      } catch (popupErr) {
+        // If user wasn't originally a Google user or reauthenticateWithPopup failed, attempt signInWithPopup
+        if (popupErr.code === 'auth/popup-closed-by-user') {
+          throw new Error('Google sign-in popup was closed before completing verification.');
+        }
+        reauthResult = await signInWithPopup(auth, googleProvider);
+      }
+
+      const verifiedUser = reauthResult.user;
+
+      // Verify that the signed-in account matches the currently locked account
+      if (verifiedUser.uid !== myUid) {
+        throw new Error(`Account mismatch: signed in as ${verifiedUser.email || verifiedUser.uid}, but this device is locked for ${userEmail}.`);
+      }
+
+      // Obtain a fresh Firebase ID token with recent auth_time
+      const idToken = await verifiedUser.getIdToken(true);
+
+      // Verify authorization on the trusted backend
+      const response = await fetch('/api/app-lock/verify-firebase-auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          idToken,
+          expectedUid: myUid,
+          expectedEmail: userEmail,
+        }),
+      });
+
+      const data = await safeParseResponse(response);
+
+      if (!data.resetToken) {
+        throw new Error('Backend authorization did not return a valid reset token.');
+      }
+
+      setResetToken(data.resetToken);
+      setError('');
+      setStatusNotice('Identity verified with Google Authentication!');
+      setCurrentView('otp_verified_choice');
+    } catch (err) {
+      console.warn('[Firebase Auth Recovery]:', err);
+      if (err.code === 'auth/popup-closed-by-user') {
+        setError('Authentication was cancelled. Please try again.');
+      } else if (err.code === 'auth/network-request-failed') {
+        setError('Network error during Google sign-in. Please check your connection.');
+      } else {
+        setError(err.message || 'Failed to authenticate with Google.');
+      }
+    } finally {
+      setIsReauthenticating(false);
+    }
+  };
+
+  // 4. SAVE NEW PIN / PASSWORD (Authenticated via Single-Use Token)
   const handleSaveNewLock = async (e) => {
     e.preventDefault();
     if (!newLockVal) {
@@ -144,6 +234,25 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
 
     setLoading(true);
     try {
+      // 1. Update via Server Token if available
+      if (resetToken) {
+        const response = await fetch('/api/app-lock/reset-lock', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            uid: myUid,
+            resetToken,
+            newLockType,
+            newLockVal,
+          }),
+        });
+
+        await safeParseResponse(response);
+      }
+
+      // 2. Sync to Firestore client document as fallback & real-time snapshot consistency
       const userRef = doc(db, 'users', myUid);
       await setDoc(
         userRef,
@@ -152,14 +261,30 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
             appLockEnabled: true,
             appLockType: newLockType,
             appLockSecret: newLockVal,
+            appPin: newLockVal,
           },
         },
         { merge: true }
       );
+
+      // 3. Sync to localStorage cache so app stays unlocked and next startup reads updated PIN
+      try {
+        const cached = {
+          ...(privacySettings || {}),
+          appLockEnabled: true,
+          appLockType: newLockType,
+          appLockSecret: newLockVal,
+          appPin: newLockVal,
+        };
+        localStorage.setItem(`privacy_${myUid}`, JSON.stringify(cached));
+      } catch (cacheErr) {
+        console.warn('[AppLock] Cache sync notice:', cacheErr);
+      }
+
       onUnlock();
     } catch (err) {
       console.error('Error saving lock:', err);
-      setError('Failed to update. Try again.');
+      setError(err.message || 'Failed to update. Try again.');
     } finally {
       setLoading(false);
     }
@@ -221,14 +346,24 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
               Unlock Workspace
             </button>
 
-            <button
-              type="button"
-              onClick={handleSendRecoveryOtp}
-              disabled={isSending}
-              className="text-xs font-bold text-teal-400 hover:underline cursor-pointer block mx-auto pt-2"
-            >
-              {isSending ? 'Sending PIN reset code...' : `Forgot ${lockType === 'pin' ? 'PIN' : 'Password'}?`}
-            </button>
+            <div className="flex flex-col items-center gap-1.5 pt-2">
+              <button
+                type="button"
+                onClick={handleSendRecoveryOtp}
+                disabled={isSending}
+                className="text-xs font-bold text-teal-400 hover:underline cursor-pointer"
+              >
+                {isSending ? 'Sending PIN reset code...' : `Forgot ${lockType === 'pin' ? 'PIN' : 'Password'}?`}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setError(''); setCurrentView('reauth_options'); }}
+                className="text-[11px] font-semibold text-gray-400 hover:text-teal-300 transition-colors cursor-pointer"
+              >
+                Can't access your email?
+              </button>
+            </div>
           </form>
         )}
 
@@ -274,14 +409,14 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
               </button>
               <button
                 type="submit"
-                disabled={enteredOtp.length !== 4}
+                disabled={enteredOtp.length !== 4 || isVerifying}
                 className="flex-1 py-3 rounded-2xl bg-teal-500 hover:bg-teal-400 text-gray-950 font-black text-xs transition-transform active:scale-95 disabled:opacity-40 cursor-pointer shadow-lg shadow-teal-500/20"
               >
-                Verify Code
+                {isVerifying ? 'Verifying...' : 'Verify Code'}
               </button>
             </div>
 
-            <div className="pt-2">
+            <div className="flex flex-col items-center gap-2 pt-2">
               {resendTimer > 0 ? (
                 <span className="text-[11px] text-gray-500">Resend PIN code in {resendTimer}s</span>
               ) : (
@@ -294,8 +429,75 @@ export default function AppLockScreen({ currentUser, privacySettings, onUnlock }
                   {isSending ? 'Resending...' : 'Resend PIN Reset Code'}
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => { setError(''); setCurrentView('reauth_options'); }}
+                className="text-[11px] font-semibold text-gray-400 hover:text-teal-300 transition-colors cursor-pointer"
+              >
+                Can't access your email?
+              </button>
             </div>
           </form>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* VIEW 2B: ALTERNATIVE RECOVERY (CAN'T ACCESS EMAIL)            */}
+        {/* ------------------------------------------------------------- */}
+        {currentView === 'reauth_options' && (
+          <div className="w-full space-y-4 animate-in zoom-in-95 duration-150">
+            <div>
+              <h2 className="text-lg font-black text-white">Alternative Recovery</h2>
+              <p className="text-xs text-gray-400 mt-1">
+                Verify your identity directly through Firebase Authentication to set a new PIN.
+              </p>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-gray-950/80 border border-gray-800 text-left space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-gray-400">Account:</span>
+                <span className="text-xs font-semibold text-teal-300 truncate">{userEmail}</span>
+              </div>
+              <p className="text-[11px] text-gray-400 leading-relaxed">
+                Sign in with the verified Google account linked to this workspace. A fresh authentication token will authorize you to reset your App Lock PIN.
+              </p>
+            </div>
+
+            {error && <p className="text-xs font-bold text-red-400">{error}</p>}
+
+            <button
+              type="button"
+              onClick={handleFirebaseReauth}
+              disabled={isReauthenticating}
+              className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-gray-100 text-gray-900 font-bold text-xs flex items-center justify-center gap-2.5 transition-transform active:scale-95 shadow-lg disabled:opacity-50 cursor-pointer"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              <span>{isReauthenticating ? 'Authenticating with Google...' : 'Verify with Google'}</span>
+            </button>
+
+            <div className="pt-2 border-t border-gray-800/80 text-left space-y-1.5">
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">Other Recovery Options:</span>
+              <p className="text-[11px] text-gray-400">
+                • If you use Email & Password, request the 4-digit code and check your spam/junk folders.
+              </p>
+              <p className="text-[11px] text-gray-400">
+                • If you have completely lost access to your login credentials, contact support at <span className="text-teal-400 font-mono">qwik.messages.official@gmail.com</span> for manual account verification.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => { setError(''); setCurrentView('enter_lock'); }}
+              className="w-full py-2.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-gray-400 text-xs font-bold transition-colors cursor-pointer border border-gray-800"
+            >
+              Back to Lock Screen
+            </button>
+          </div>
         )}
 
         {/* ------------------------------------------------------------- */}
