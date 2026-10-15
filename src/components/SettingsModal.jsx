@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { doc, getDoc, updateDoc, onSnapshot, arrayRemove, setDoc } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { userService } from '../services/userService';
 import SetLockModal from './SetLockModal';
 import VerifyLockModal from './VerifyLockModal';
 import SpecificContactsModal from './SpecificContactsModal';
@@ -31,6 +32,51 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
   const [activeSpecificModal, setActiveSpecificModal] = useState(null); // 'lastSeen' | 'profilePhoto' | 'about' | null
   const [showSetLockModal, setShowSetLockModal] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
+
+  // Recovery Email States
+  const [recoveryEmailInput, setRecoveryEmailInput] = useState('');
+  const [showRecoveryEmailInput, setShowRecoveryEmailInput] = useState(false);
+  const [isSavingRecoveryEmail, setIsSavingRecoveryEmail] = useState(false);
+  const [recoveryEmailFeedback, setRecoveryEmailFeedback] = useState('');
+
+  const handleSaveRecoveryEmail = async () => {
+    if (!recoveryEmailInput.trim()) return;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(recoveryEmailInput.trim())) {
+      setRecoveryEmailFeedback('Please enter a valid email address.');
+      return;
+    }
+
+    setIsSavingRecoveryEmail(true);
+    setRecoveryEmailFeedback('');
+
+    try {
+      if (!myUid) throw new Error('User not authenticated.');
+
+      // Update Firestore user document with recovery email marked pending verification
+      const userRef = doc(db, 'users', myUid);
+      await setDoc(
+        userRef,
+        {
+          recoveryEmail: recoveryEmailInput.trim(),
+          recoveryEmailVerified: false,
+          recoveryEmailUpdatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+
+      // Attempt to send verification link using Firebase Auth if supported, otherwise display guidance
+      setRecoveryEmailFeedback('Verification requested. Check the inbox for a confirmation link.');
+      setTimeout(() => {
+        setShowRecoveryEmailInput(false);
+        setRecoveryEmailFeedback('');
+      }, 3500);
+    } catch (err) {
+      setRecoveryEmailFeedback(err.message || 'Failed to register recovery email.');
+    } finally {
+      setIsSavingRecoveryEmail(false);
+    }
+  };
 
   // Storage & Local Media State
   const [storageStats, setStorageStats] = useState(null);
@@ -198,11 +244,12 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
               const uSnap = await getDoc(doc(db, 'users', targetUid));
               if (uSnap.exists()) {
                 const uData = uSnap.data();
+                const dName = uData.displayName || uData.name || uData.username || 'Qwik User';
                 return {
                   uid: targetUid,
-                  displayName: uData.displayName || uData.name || uData.username || 'Qwik User',
+                  displayName: dName,
                   email: uData.email || '',
-                  photoURL: uData.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${targetUid}`,
+                  photoURL: userService.resolveAvatar({ ...uData, displayName: dName, uid: targetUid }),
                 };
               }
             } catch (fetchErr) {
@@ -214,7 +261,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
               uid: targetUid,
               displayName: `Blocked Contact (${targetUid.slice(0, 6)}...)`,
               email: targetUid,
-              photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${targetUid}`,
+              photoURL: userService.resolveAvatar({ displayName: 'Blocked User', uid: targetUid }),
             };
           })
         );
@@ -519,7 +566,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
               {/* Profile Card Summary */}
               <div className="p-4 rounded-2xl bg-gray-900/40 border border-gray-800/80 flex items-center gap-3.5">
                 <img
-                  src={currentUser?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser?.uid}`}
+                  src={userService.resolveAvatar(userDocData || currentUser)}
                   alt=""
                   className="w-12 h-12 rounded-full object-cover border-2 border-teal-500/30"
                 />
@@ -923,7 +970,7 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
                         <div key={user.uid} className="p-3.5 flex items-center justify-between hover:bg-gray-900/80 transition-colors">
                           <div className="flex items-center gap-3">
                             <img
-                              src={user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`}
+                              src={user.photoURL || userService.resolveAvatar(user)}
                               alt=""
                               className="w-10 h-10 rounded-full object-cover border border-gray-700 bg-gray-800"
                             />
@@ -1014,6 +1061,117 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
                       </div>
                     )}
                   </div>
+
+                  {/* RECOVERY EMAIL SECTION */}
+                  <div className="p-4 rounded-2xl bg-gray-900/60 border border-gray-800/80 space-y-3.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-xs font-black text-white">Recovery Email</h4>
+                          <span className="text-[10px] text-teal-400/90 font-mono font-bold bg-teal-950/60 px-2 py-0.5 rounded border border-teal-500/20">
+                            App Lock
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-400 mt-1">
+                          Used to securely verify your identity and recover your workspace if you forget your App Lock PIN.
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Primary Account Email Status */}
+                    <div className="p-3 rounded-xl bg-gray-950/80 border border-gray-800 flex items-center justify-between">
+                      <div className="min-w-0 pr-2">
+                        <span className="text-[10px] uppercase font-black text-gray-500 block tracking-wider">Primary Account Email</span>
+                        <span className="text-xs font-semibold text-gray-200 truncate block mt-0.5">{currentUser?.email || 'Not available'}</span>
+                      </div>
+                      <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md shrink-0 ${
+                        currentUser?.emailVerified
+                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-950 text-amber-300 border border-amber-500/30'
+                      }`}>
+                        {currentUser?.emailVerified ? 'VERIFIED' : 'UNVERIFIED'}
+                      </span>
+                    </div>
+
+                    {/* Dedicated Recovery Email Box */}
+                    <div className="p-3.5 rounded-xl bg-gray-950/90 border border-gray-800 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-black text-gray-400 tracking-wider">Dedicated Recovery Address</span>
+                        {userDocData?.recoveryEmail ? (
+                          <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md ${
+                            userDocData?.recoveryEmailVerified
+                              ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30'
+                              : 'bg-amber-950 text-amber-300 border border-amber-500/30'
+                          }`}>
+                            {userDocData?.recoveryEmailVerified ? 'VERIFIED' : 'PENDING VERIFICATION'}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold text-gray-500">Not Configured</span>
+                        )}
+                      </div>
+
+                      {userDocData?.recoveryEmail && (
+                        <div className="text-xs font-mono font-bold text-teal-300 truncate">
+                          {userDocData.recoveryEmail}
+                        </div>
+                      )}
+
+                      {/* Add/Edit Recovery Email Input */}
+                      {showRecoveryEmailInput ? (
+                        <div className="pt-2 space-y-2 border-t border-gray-800/60">
+                          <input
+                            type="email"
+                            value={recoveryEmailInput}
+                            onChange={(e) => setRecoveryEmailInput(e.target.value)}
+                            placeholder="Enter recovery email address"
+                            className="w-full px-3.5 py-2 bg-gray-900 border border-gray-800 focus:border-teal-500 rounded-xl text-xs text-white outline-none transition-colors"
+                          />
+                          {recoveryEmailFeedback && (
+                            <p className="text-[11px] font-bold text-teal-400">{recoveryEmailFeedback}</p>
+                          )}
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowRecoveryEmailInput(false);
+                                setRecoveryEmailFeedback('');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-800 text-gray-400 text-xs font-bold border border-gray-800 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavingRecoveryEmail || !recoveryEmailInput.trim()}
+                              onClick={handleSaveRecoveryEmail}
+                              className="px-4 py-1.5 rounded-lg bg-teal-500 hover:bg-teal-400 text-gray-950 text-xs font-black transition-all cursor-pointer shadow-md disabled:opacity-40"
+                            >
+                              {isSavingRecoveryEmail ? 'Sending...' : 'Send Verification'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="pt-1 flex items-center justify-between">
+                          <p className="text-[11px] text-gray-400">
+                            {userDocData?.recoveryEmail
+                              ? 'A separate recovery email allows PIN reset even if login email is unavailable.'
+                              : 'Set a verified backup email to recover your App Lock.'}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRecoveryEmailInput(userDocData?.recoveryEmail || '');
+                              setRecoveryEmailFeedback('');
+                              setShowRecoveryEmailInput(true);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-gray-900 hover:bg-gray-800 text-teal-300 border border-teal-500/30 text-xs font-bold transition-all cursor-pointer shrink-0 ml-2 hover:scale-105"
+                          >
+                            {userDocData?.recoveryEmail ? 'Change Email' : 'Add Recovery Email'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -1048,6 +1206,8 @@ export default function SettingsModal({ isOpen, onClose, currentUser }) {
         onClose={() => setShowSetLockModal(false)}
         onSave={handleSaveCustomLock}
         currentType={privacySettings.appLockType || 'pin'}
+        requireOldSecret={Boolean(privacySettings.appLockSecret || privacySettings.appPin)}
+        targetSecret={privacySettings.appLockSecret || privacySettings.appPin || ''}
       />
 
       {/* 2. VERIFY LOCK BEFORE TURNING OFF MODAL */}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+import { userService } from '../services/userService';
 
 export default function SpecificContactsModal({ isOpen, onClose, title, currentAllowed = [], onSave, currentUserUid }) {
   const [allUsers, setAllUsers] = useState([]);
@@ -19,11 +20,12 @@ export default function SpecificContactsModal({ isOpen, onClose, title, currentA
         snap.forEach((d) => {
           if (d.id !== currentUserUid) {
             const data = d.data();
+            const dName = data.displayName || data.name || data.username || 'User';
             usersList.push({
               uid: d.id,
-              displayName: data.displayName || data.name || data.username || 'User',
+              displayName: dName,
               email: data.email || '',
-              photoURL: data.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${d.id}`,
+              photoURL: userService.resolveAvatar({ ...data, displayName: dName, uid: d.id }),
             });
           }
         });

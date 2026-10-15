@@ -124,16 +124,18 @@ export function SpecificContactsModal({ isOpen, onClose, title, currentAllowed =
       try {
         const { collection, getDocs } = await import('firebase/firestore');
         const { db } = await import('../firebaseConfig');
+        const { userService } = await import('../services/userService');
         const snap = await getDocs(collection(db, 'users'));
         const usersList = [];
         snap.forEach((d) => {
           if (d.id !== currentUserUid) {
             const data = d.data();
+            const dName = data.displayName || data.name || data.username || 'User';
             usersList.push({
               uid: d.id,
-              displayName: data.displayName || data.name || data.username || 'User',
+              displayName: dName,
               email: data.email || '',
-              photoURL: data.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${d.id}`,
+              photoURL: userService.resolveAvatar({ ...data, displayName: dName, uid: d.id }),
             });
           }
         });

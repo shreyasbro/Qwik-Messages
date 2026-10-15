@@ -1,3 +1,5 @@
+import { userService } from '../services/userService';
+
 export const safeString = (val, fallback = '') => {
   if (val === null || val === undefined) return fallback;
   if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') return String(val);
@@ -36,34 +38,40 @@ export const safeString = (val, fallback = '') => {
 
 /**
  * Resolves user profile photo based on privacy settings
+ * Uses canonical userService.resolveAvatar to avoid any cartoon bottts placeholders
  */
 export const getVisibleAvatar = (user, viewerUid, viewerContacts = []) => {
-  if (!user) return 'https://api.dicebear.com/7.x/bottts/svg?seed=default';
+  if (!user) {
+    return userService.resolveAvatar(null);
+  }
   
   // Own photo is always visible to oneself
-  if (user.uid === viewerUid) return user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`;
+  if (user.uid === viewerUid) {
+    return userService.resolveAvatar(user);
+  }
 
   const setting = user.privacySettings?.profilePhoto || 'everyone';
   const allowed = user.privacySettings?.profilePhotoAllowed || [];
 
   if (setting === 'nobody') {
-    return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+    // Hide picture, show initials fallback
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=0d9488&color=fff&bold=true`;
   }
 
   if (setting === 'contacts') {
     const isContact = viewerContacts.includes(user.uid) || (user.contacts || []).includes(viewerUid);
     if (!isContact) {
-      return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+      return `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=0d9488&color=fff&bold=true`;
     }
   }
 
   if (setting === 'specific') {
     if (!allowed.includes(viewerUid)) {
-      return `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+      return `https://ui-avatars.com/api/?name=${encodeURIComponent(user.displayName || 'User')}&background=0d9488&color=fff&bold=true`;
     }
   }
 
-  return user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid || 'user'}`;
+  return userService.resolveAvatar(user);
 };
 
 /**

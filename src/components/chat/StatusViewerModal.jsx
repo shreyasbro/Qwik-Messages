@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { doc, deleteDoc, addDoc, collection, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
+import { userService } from '../../services/userService';
 
 export default function StatusViewerModal({ isOpen, onClose, currentUser, statuses = [], onAddStatus }) {
   const [activeUserIdx, setActiveUserIdx] = useState(0);
@@ -15,10 +16,12 @@ export default function StatusViewerModal({ isOpen, onClose, currentUser, status
   (statuses || []).forEach((st) => {
     const uid = st.userId || 'unknown';
     if (!userMap[uid]) {
+      const uName = st.userName || (uid === currentUser?.uid ? (currentUser?.displayName || 'My Account') : 'Contact');
+      const uAvatar = st.userAvatar || (uid === currentUser?.uid ? userService.resolveAvatar(currentUser) : userService.resolveAvatar({ uid, displayName: uName }));
       userMap[uid] = {
         userId: uid,
-        userName: st.userName || (uid === currentUser?.uid ? (currentUser?.displayName || 'My Account') : 'Contact'),
-        userAvatar: st.userAvatar || (uid === currentUser?.uid ? (currentUser?.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser?.uid || 'me'}`) : `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`),
+        userName: uName,
+        userAvatar: uAvatar,
         stories: [],
       };
     }

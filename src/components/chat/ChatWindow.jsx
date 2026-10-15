@@ -889,11 +889,12 @@ export default function ChatWindow() {
       } else {
         // 3. Atomic Subcollection Write
         const messagesRef = collection(db, 'chats', targetChatId, 'messages');
+        const activePhotoUrl = currentUserProfile?.photoURL || currentUserProfile?.avatarUrl || currentUser?.photoURL || null;
         const msgPayload = {
           text: trimmedText,
           senderId: senderId,
-          senderName: currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User',
-          photoURL: currentUser?.photoURL || null,
+          senderName: currentUserProfile?.displayName || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'User',
+          photoURL: activePhotoUrl,
           createdAt: serverTimestamp(),
           timestamp: serverTimestamp(),
           deletedFor: [],

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, addDoc, serverTimestamp, Timestamp, getDocs, query, limit } from 'firebase/firestore';
 import { db } from '../../firebaseConfig';
 import { compressImageToHD } from '../../utils/imageOptimizer';
+import { userService } from '../../services/userService';
 
 export default function StatusUploadModal({ currentUser, onClose }) {
   const [tab, setTab] = useState('text'); // 'text' | 'image' | 'video'
@@ -197,10 +198,7 @@ export default function StatusUploadModal({ currentUser, onClose }) {
         currentUser?.email?.split('@')[0] || 
         'Anonymous';
 
-      const effectiveAvatar = 
-        currentUser?.photoURL || 
-        currentUser?.avatar || 
-        `https://api.dicebear.com/7.x/bottts/svg?seed=${currentUser?.uid}`;
+      const effectiveAvatar = userService.resolveAvatar(currentUser);
 
       const expiresAtDate = new Date(Date.now() + storyDuration * 60 * 60 * 1000);
 

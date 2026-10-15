@@ -8,53 +8,102 @@ import PhotoEditorModal from './PhotoEditorModal';
 import PresenceBadge, { PRESENCE_OPTIONS } from './PresenceBadge';
 import ShowQRCodeModal from './ShowQRCodeModal';
 
+/**
+ * Upload cropped image/blob directly to Cloudinary media storage
+ */
+const uploadAvatarToCloudinary = (fileOrBlob) => {
+  return new Promise((resolve, reject) => {
+    const cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || 'dphkrk4sf';
+    const uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || 'Media Sending';
+
+    const xhr = new XMLHttpRequest();
+    const formData = new FormData();
+    formData.append('file', fileOrBlob);
+    formData.append('upload_preset', uploadPreset);
+
+    const targetUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
+
+    xhr.open('POST', targetUrl, true);
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = JSON.parse(xhr.responseText);
+          if (response.secure_url) {
+            resolve(response.secure_url);
+          } else {
+            reject(new Error('Cloudinary response missing secure_url'));
+          }
+        } catch (e) {
+          reject(new Error('Invalid response from media server'));
+        }
+      } else {
+        try {
+          const errRes = JSON.parse(xhr.responseText);
+          reject(new Error(errRes.error?.message || `Upload failed with status ${xhr.status}`));
+        } catch {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network connection error while uploading profile photo'));
+    };
+
+    xhr.send(formData);
+  });
+};
+
 export default function ProfileEditorModal({ isOpen, onClose, currentUser, userProfile }) {
   const [displayName, setDisplayName] = useState(userProfile?.displayName || currentUser?.displayName || '');
   const [username, setUsername] = useState(userProfile?.username || '');
   const [photoURL, setPhotoURL] = useState(userProfile?.photoURL || currentUser?.photoURL || '');
+  const [pendingPhotoBlob, setPendingPhotoBlob] = useState(null); // Local blob/data preview before upload
   const [bio, setBio] = useState(userProfile?.bio || "Hey there! I am using Qwik Messages.");
   const [presenceStatus, setPresenceStatus] = useState(userProfile?.presenceStatus || 'online');
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingImageSrc, setEditingImageSrc] = useState(null);
   const [showQRModal, setShowQRModal] = useState(false);
+  const [statusFeedback, setStatusFeedback] = useState('');
   
   // Uniqueness check state
   const [checkingUsername, setCheckingUsername] = useState(false);
-  const [usernameStatus, setUsernameStatus] = useState(''); // 'available', 'taken', or 'invalid'
+  const [usernameStatus, setUsernameStatus] = useState('available');
   
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    if (userProfile) {
-      setDisplayName(userProfile.displayName || currentUser?.displayName || '');
-      setUsername(userProfile.username || '');
-      setPhotoURL(userProfile.photoURL || currentUser?.photoURL || '');
-      setBio(userProfile.bio || "Hey there! I am using Qwik Messages.");
-      setPresenceStatus(userProfile.presenceStatus || 'online');
+    if (userProfile || currentUser) {
+      setDisplayName(userProfile?.displayName || currentUser?.displayName || '');
+      setUsername(userProfile?.username || '');
+      setPhotoURL(userProfile?.photoURL || currentUser?.photoURL || '');
+      setPendingPhotoBlob(null);
+      setBio(userProfile?.bio || "Hey there! I am using Qwik Messages.");
+      setPresenceStatus(userProfile?.presenceStatus || 'online');
+      setUsernameStatus('available');
+      setStatusFeedback('');
     }
-  }, [userProfile, currentUser]);
+  }, [userProfile, currentUser, isOpen]);
 
   // Debounced Username Uniqueness Check
   useEffect(() => {
     if (!username.trim()) {
-      setUsernameStatus('');
+      setUsernameStatus('available');
       return;
     }
 
-    if (!username.startsWith('@')) {
+    let clean = username.trim().toLowerCase();
+    if (!clean.startsWith('@')) clean = '@' + clean;
+
+    if (clean.length < 3) {
       setUsernameStatus('invalid');
       return;
     }
 
-    const cleanUsername = username.trim().toLowerCase();
-    if (cleanUsername.length < 3) {
-      setUsernameStatus('invalid');
-      return;
-    }
-
-    // Don't verify if it matches user's current username
-    if (cleanUsername === userProfile?.username?.toLowerCase()) {
+    // Don't verify if it matches user's current registered username
+    if (clean === userProfile?.username?.toLowerCase()) {
       setUsernameStatus('available');
       return;
     }
@@ -62,17 +111,17 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
     setCheckingUsername(true);
     const delayDebounce = setTimeout(async () => {
       try {
-        const available = await isUsernameAvailable(cleanUsername, currentUser.uid);
+        const available = await isUsernameAvailable(clean, currentUser?.uid);
         setUsernameStatus(available ? 'available' : 'taken');
       } catch (err) {
         console.error("Error checking username availability:", err);
       } finally {
         setCheckingUsername(false);
       }
-    }, 500);
+    }, 450);
 
     return () => clearTimeout(delayDebounce);
-  }, [username, userProfile, currentUser]);
+  }, [username, userProfile?.username, currentUser?.uid]);
 
   if (!isOpen) return null;
 
@@ -85,7 +134,13 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
     if (!file) return;
 
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file.');
+      alert('Please upload a valid image file (PNG, JPG, WebP, etc.).');
+      return;
+    }
+
+    // Size limit guard: 10MB
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File is too large. Please select an image under 10MB.');
       return;
     }
 
@@ -96,18 +151,21 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
       setUploading(false);
     };
     reader.onerror = () => {
-      alert('Error reading file.');
+      alert('Error reading image file.');
       setUploading(false);
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleSubmit = async (e) => {
     if (e) e.preventDefault();
     if (saving) return;
-    if (!currentUser) return;
+    if (!currentUser?.uid) return;
 
     setSaving(true);
+    setStatusFeedback('');
+
     try {
       // 1. Format and sanitize username strictly
       let formattedUsername = username.trim().toLowerCase();
@@ -115,50 +173,84 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
         formattedUsername = '@' + formattedUsername;
       }
 
-      console.log(`🚀 Attempting to save Profile: [Name: ${displayName}] | [Username: ${formattedUsername}]`);
-
       // 2. Execute fail-safe uniqueness verification
-      const available = await isUsernameAvailable(formattedUsername, currentUser.uid);
-      if (!available) {
-        alert(`⚠️ The username "${formattedUsername}" is already taken by someone else. Please choose another!`);
-        setSaving(false);
-        return;
+      if (formattedUsername !== userProfile?.username?.toLowerCase()) {
+        const available = await isUsernameAvailable(formattedUsername, currentUser.uid);
+        if (!available) {
+          alert(`The username "${formattedUsername}" is already taken. Please choose another!`);
+          setSaving(false);
+          return;
+        }
       }
 
-      // 3. File URL
+      // 3. Handle Profile Photo Upload if a new photo was cropped/chosen
       let finalPhotoUrl = photoURL;
+      const photoTimestamp = Date.now();
 
-      // 4. CRITICAL ATOMIC WRITE: Strictly save username, bio, and presenceStatus to Firestore!
+      if (pendingPhotoBlob) {
+        setStatusFeedback('Uploading new profile picture...');
+        try {
+          const uploadedUrl = await uploadAvatarToCloudinary(pendingPhotoBlob);
+          finalPhotoUrl = uploadedUrl;
+          setPhotoURL(uploadedUrl);
+        } catch (uploadErr) {
+          console.error("Profile picture upload error:", uploadErr);
+          alert(`Could not upload photo: ${uploadErr.message}. Profile was not saved.`);
+          setSaving(false);
+          setStatusFeedback('');
+          return;
+        }
+      }
+
+      setStatusFeedback('Saving profile updates...');
+
+      // 4. Update Firestore user document with canonical photoURL and photoUpdatedAt
       const userDocRef = doc(db, 'users', currentUser.uid);
-      await setDoc(userDocRef, {
+      const updatePayload = {
         displayName: displayName.trim(),
-        username: formattedUsername, // Absolutely enforce this payload!
-        photoURL: finalPhotoUrl,
+        username: formattedUsername,
         bio: bio.trim(),
         presenceStatus,
-        updatedAt: serverTimestamp()
-      }, { merge: true });
+        updatedAt: serverTimestamp(),
+      };
 
-      console.log("✅ Username and Profile successfully persisted to Firestore!");
-
-      // 5. Update Firebase Auth (Strictly excluding Base64 photoURL)
-      const authPayload = { displayName: displayName.trim() };
-      if (finalPhotoUrl && !finalPhotoUrl.startsWith('data:image')) {
-        authPayload.photoURL = finalPhotoUrl;
-      }
-      if (auth.currentUser) {
-        await updateProfile(auth.currentUser, authPayload);
+      if (finalPhotoUrl) {
+        updatePayload.photoURL = finalPhotoUrl;
+        updatePayload.avatarUrl = finalPhotoUrl;
+        updatePayload.customAvatarUrl = finalPhotoUrl;
+        updatePayload.photoUpdatedAt = photoTimestamp;
       }
 
-      alert("✅ Profile & Username updated successfully!");
-      onClose();
+      await setDoc(userDocRef, updatePayload, { merge: true });
+
+      // 5. Update Firebase Authentication photoURL & displayName
+      try {
+        if (auth.currentUser) {
+          const authUpdate = { displayName: displayName.trim() };
+          if (finalPhotoUrl && !finalPhotoUrl.startsWith('data:')) {
+            authUpdate.photoURL = finalPhotoUrl;
+          }
+          await updateProfile(auth.currentUser, authUpdate);
+        }
+      } catch (authErr) {
+        console.warn("Notice updating Firebase Auth profile:", authErr.message);
+      }
+
+      setPendingPhotoBlob(null);
+      setStatusFeedback('Profile updated successfully!');
+      setTimeout(() => {
+        onClose();
+      }, 600);
     } catch (error) {
-      console.error("🚨 Fatal Profile Save Error:", error);
+      console.error("Profile Save Error:", error);
       alert(`Failed to save: ${error.message}`);
     } finally {
       setSaving(false);
     }
   };
+
+  // Preview Avatar Resolution
+  const currentAvatarSrc = pendingPhotoBlob || photoURL || userService.resolveAvatar(userProfile || currentUser);
 
   return (
     <div className="fixed inset-0 z-[99999] flex flex-col h-[100dvh] w-full bg-slate-950 text-white overflow-hidden justify-start select-none">
@@ -189,15 +281,15 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
               <div className="relative group">
                 <div 
                   onClick={handlePhotoClick}
-                  className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-full overflow-hidden border-2 border-slate-800 hover:border-emerald-500 transition-colors cursor-pointer group animate-fade-in"
+                  className="w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-full overflow-hidden border-2 border-slate-800 hover:border-emerald-500 transition-colors cursor-pointer group animate-fade-in relative"
                 >
                   <img
-                    src={photoURL || userService.resolveAvatar(userProfile || currentUser)}
+                    src={currentAvatarSrc}
                     alt="Profile Preview"
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white text-[10px] font-black uppercase tracking-wider">
-                    <span>📸</span>
+                    <span>📷</span>
                     <span>Change</span>
                   </div>
                 </div>
@@ -211,7 +303,8 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
                 onChange={handleFileChange}
                 className="hidden"
               />
-              {uploading && <span className="text-[10px] text-slate-400 font-bold mt-1">Uploading preview...</span>}
+              {uploading && <span className="text-[10px] text-teal-400 font-bold mt-1">Preparing editor...</span>}
+              {pendingPhotoBlob && <span className="text-[10px] text-emerald-400 font-bold mt-1">New photo ready</span>}
               <span className="text-[11px] text-slate-400 mt-2 font-medium">Profile Photo</span>
             </div>
 
@@ -309,13 +402,13 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
               <div className="mt-1.5 min-h-[16px] text-[10px] font-bold mb-4">
                 {checkingUsername && <span className="text-slate-400">Verifying registry...</span>}
                 {!checkingUsername && usernameStatus === 'available' && (
-                  <span className="text-emerald-400">🟢 Username available</span>
+                  <span className="text-emerald-400">✓ Username available</span>
                 )}
                 {!checkingUsername && usernameStatus === 'taken' && (
-                  <span className="text-rose-400">🔴 Username already taken!</span>
+                  <span className="text-rose-400">✕ Username already taken!</span>
                 )}
                 {!checkingUsername && usernameStatus === 'invalid' && (
-                  <span className="text-amber-400">⚠️ Minimum 3 letters, must start with @</span>
+                  <span className="text-amber-400">⚠ Minimum 3 letters, must start with @</span>
                 )}
               </div>
             </div>
@@ -341,18 +434,25 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
             </div>
           </div>
 
+          {statusFeedback && (
+            <div className="p-3 rounded-xl bg-teal-950/60 border border-teal-500/30 text-teal-300 text-xs font-bold text-center">
+              {statusFeedback}
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex gap-3 pt-2">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 bg-slate-900 border border-slate-800 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-800 transition-colors cursor-pointer"
+              disabled={saving}
+              className="flex-1 py-3 bg-slate-900 border border-slate-800 text-white rounded-xl text-xs font-black uppercase tracking-wider hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={saving || checkingUsername || usernameStatus !== 'available'}
+              disabled={saving || checkingUsername || (usernameStatus !== 'available' && usernameStatus !== '')}
               className="flex-1 py-3 bg-gradient-to-r from-emerald-400 to-teal-400 disabled:from-slate-800 disabled:to-slate-900 text-slate-950 disabled:text-slate-500 rounded-xl text-xs font-black uppercase tracking-wider transition-transform active:scale-95 cursor-pointer shadow-lg"
             >
               {saving ? 'Saving...' : 'Save Profile'}
@@ -364,8 +464,9 @@ export default function ProfileEditorModal({ isOpen, onClose, currentUser, userP
         <PhotoEditorModal 
           imageSrc={editingImageSrc} 
           onCancel={() => setEditingImageSrc(null)} 
-          onApply={(finalPhoto) => { 
-            setPhotoURL(finalPhoto); 
+          onApply={(finalPhotoDataUrl) => { 
+            // Store preview for immediate UI feedback and queue upload on Save Profile
+            setPendingPhotoBlob(finalPhotoDataUrl);
             setEditingImageSrc(null); 
           }} 
         />

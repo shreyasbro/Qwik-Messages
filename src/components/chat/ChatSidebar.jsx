@@ -708,7 +708,7 @@ export default function ChatSidebar({ onOpenSettings, onOpenUpdates }) {
           const userAvatarUrl = userService.resolveAvatar({
             ...(userProfile || {}),
             displayName: userDisplayName,
-            photoURL: currentUser?.photoURL || userProfile?.avatarUrl
+            photoURL: userProfile?.photoURL || userProfile?.avatarUrl || currentUser?.photoURL
           });
 
           return (
